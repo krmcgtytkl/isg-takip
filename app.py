@@ -1,15 +1,4 @@
 import os
-# Eski veritabanını zorla sil (şema değişikliği için)
-if os.path.exists('isg.db'):
-    try:
-        os.remove('isg.db')
-    except:
-        pass
-if os.path.exists('instance/isg.db'):
-    try:
-        os.remove('instance/isg.db')
-    except:
-        pass
 import io
 from flask import Flask, render_template_string, request, redirect, url_for, send_file
 from flask_sqlalchemy import SQLAlchemy
@@ -1472,7 +1461,9 @@ def kaza_sil(id):
     k = IsKazasi.query.get_or_404(id); db.session.delete(k); db.session.commit()
     return redirect(url_for('kaza_listesi'))
 
+# Veritabanı tablolarını uygulama başlarken otomatik oluştur
+with app.app_context():
+    db.create_all()
+
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
     app.run(debug=True, port=5000)
