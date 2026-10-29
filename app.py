@@ -1,6 +1,6 @@
 import os
 import io
-from flask import Flask, render_template_string, request, redirect, url_for, send_file
+from flask import Flask, render_template_string, request, redirect, url_for, send_file, session
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
@@ -9,6 +9,21 @@ from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'isg-gizli-anahtar'
+
+# ---------------- KULLANICI GİRİŞİ ----------------
+KULLANICI_ADI = 'admin'
+SITE_SIFRESI = '1071isg'
+app.config['PERMANENT_SESSION_LIFETIME'] = 86400
+
+# ---------------- FİRMA LİSTESİ ----------------
+# Kendi firmalarınızı buraya ekleyin. İstediğiniz kadar ekleyebilirsiniz.
+FIRMALAR = [
+    "Tat Nişasta.",
+    "Sitrik Asit.",
+    "Etanol",
+    "Tezmak",
+]
+
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///isg.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -52,7 +67,6 @@ class IsKazasi(db.Model):
     yaralanma_turu = db.Column(db.String(80))
     kok_neden = db.Column(db.Text)
     duzeltici_faaliyet = db.Column(db.Text)
-    
     sgk_bildirim_tarihi = db.Column(db.Date, nullable=True)
     rapor_gun_sayisi = db.Column(db.Integer, nullable=True)
     kaza_sonrasi_egitim = db.Column(db.Date, nullable=True)
@@ -60,28 +74,20 @@ class IsKazasi(db.Model):
 class RiskPlan(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     firma_adi = db.Column(db.String(150), nullable=False)
-    
-    # Risk Değerlendirme
     rd_tehlike_sinifi = db.Column(db.String(50), nullable=True)
     rd_tarihi = db.Column(db.Date, nullable=True)
     rd_gecerlilik = db.Column(db.Date, nullable=True)
-    
-    # Acil Durum Planı
     adp_tehlike_sinifi = db.Column(db.String(50), nullable=True)
     adp_tarihi = db.Column(db.Date, nullable=True)
     adp_gecerlilik = db.Column(db.Date, nullable=True)
-    
-    # Eğitim Planı
     egitim_tehlike_sinifi = db.Column(db.String(50), nullable=True)
     egitim_plani_tarihi = db.Column(db.Date, nullable=True)
     egitim_plani_gecerlilik = db.Column(db.Date, nullable=True)
-    
-    # Çalışma Planı
     calisma_tehlike_sinifi = db.Column(db.String(50), nullable=True)
     calisma_plani_tarihi = db.Column(db.Date, nullable=True)
     calisma_plani_gecerlilik = db.Column(db.Date, nullable=True)
 
-# ---------------- HTML ŞABLONU (YENİ TASARIM) ----------------
+# ---------------- HTML ŞABLONU (ORTAK) ----------------
 BASE_HTML = """
 <!DOCTYPE html>
 <html lang="tr">
@@ -93,164 +99,124 @@ BASE_HTML = """
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
     <style>
-        body {
-            font-family: 'Poppins', sans-serif;
-            background: #f4f7f6;
-            color: #2c3e50;
-            overflow-x: hidden;
-        }
-        .sidebar {
-            height: 100vh;
-            width: 250px;
-            position: fixed;
-            top: 0;
-            left: 0;
-            background: linear-gradient(180deg, #1e3c72 0%, #2a5298 100%);
-            color: white;
-            padding-top: 20px;
-            border-top-right-radius: 20px;
-            border-bottom-right-radius: 20px;
-            box-shadow: 4px 0 15px rgba(0,0,0,0.1);
-        }
-        .sidebar h4 {
-            text-align: center;
-            font-weight: 700;
-            margin-bottom: 30px;
-            letter-spacing: 1px;
-            font-size: 1.2rem;
-        }
-        .sidebar a {
-            padding: 12px 25px;
-            text-decoration: none;
-            font-size: 14px;
-            color: rgba(255, 255, 255, 0.8);
-            display: block;
-            transition: 0.3s;
-        }
-        .sidebar a:hover, .sidebar a.active {
-            background: rgba(255, 255, 255, 0.1);
-            color: white;
-            border-left: 4px solid #fff;
-        }
+        body { font-family: 'Poppins', sans-serif; background: #f4f7f6; color: #2c3e50; overflow-x: hidden; }
+        .sidebar { height: 100vh; width: 250px; position: fixed; top: 0; left: 0; background: linear-gradient(180deg, #1e3c72 0%, #2a5298 100%); color: white; padding-top: 20px; border-top-right-radius: 20px; border-bottom-right-radius: 20px; box-shadow: 4px 0 15px rgba(0,0,0,0.1); display: flex; flex-direction: column; }
+        .sidebar h4 { text-align: center; font-weight: 700; margin-bottom: 20px; letter-spacing: 1px; font-size: 1.2rem; }
+        .sidebar a { padding: 12px 25px; text-decoration: none; font-size: 14px; color: rgba(255, 255, 255, 0.8); display: block; transition: 0.3s; }
+        .sidebar a:hover, .sidebar a.active { background: rgba(255, 255, 255, 0.1); color: white; border-left: 4px solid #fff; }
         .sidebar a i { margin-right: 10px; }
+        .sidebar-menu { flex: 1; overflow-y: auto; }
+        .sidebar-bottom { padding-bottom: 20px; }
+        .main-content { margin-left: 250px; padding: 30px; min-height: 100vh; background: #f4f7f6; }
         
-        .main-content {
-            margin-left: 250px;
-            padding: 30px;
-            min-height: 100vh;
-            background: #f4f7f6;
-        }
-        .top-bar {
+        /* FİRMA SEÇİCİ BANT */
+        .firma-selector {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 15px;
+            padding: 20px 25px;
+            margin-bottom: 25px;
+            color: white;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 25px;
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+            flex-wrap: wrap;
+            gap: 15px;
         }
-        .top-bar h3 { font-weight: 600; margin: 0; font-size: 1.3rem; }
-        
-        .widget-card {
+        .firma-selector .label {
+            font-size: 0.85rem;
+            opacity: 0.9;
+            margin-bottom: 5px;
+            display: block;
+        }
+        .firma-selector select {
+            border-radius: 10px;
+            border: none;
+            padding: 10px 15px;
+            font-size: 1rem;
+            font-weight: 600;
+            min-width: 300px;
             background: white;
-            border-radius: 15px;
-            padding: 20px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.03);
-            transition: transform 0.3s;
-            height: 100%;
-            border-left: 5px solid transparent;
+            color: #2c3e50;
         }
-        .widget-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.08); }
+        .firma-selector .info {
+            font-size: 0.85rem;
+            opacity: 0.9;
+        }
+        .firma-selector .info strong { color: #fff; font-size: 1.1rem; }
         
+        .widget-card { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); transition: transform 0.3s; height: 100%; border-left: 5px solid transparent; }
+        .widget-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.08); }
         .widget-rd { border-left-color: #3498db; }
         .widget-adp { border-left-color: #e74c3c; }
         .widget-egitim-plan { border-left-color: #1abc9c; }
         .widget-calisma-plan { border-left-color: #34495e; }
-        
-        .widget-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-        }
+        .widget-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; }
         .widget-title { font-weight: 600; font-size: 1rem; display: flex; align-items: center; gap: 8px; }
         .widget-icon { font-size: 1.3rem; }
-        
-        .mini-card {
-            background: white;
-            border-radius: 10px;
-            padding: 12px 15px;
-            margin-bottom: 8px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.02);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-left: 4px solid transparent;
-        }
+        .mini-card { background: white; border-radius: 10px; padding: 12px 15px; margin-bottom: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.02); display: flex; justify-content: space-between; align-items: center; border-left: 4px solid transparent; }
         .mini-card.danger { border-left-color: #e74c3c; }
         .mini-card.warning { border-left-color: #f39c12; }
         .mini-card-title { font-weight: 600; font-size: 0.85rem; margin-bottom: 2px; }
         .mini-card-sub { font-size: 0.7rem; color: #7f8c8d; }
         .mini-card-date { font-weight: 700; font-size: 0.8rem; }
-        
         .table-custom { background: transparent; font-size: 0.8rem; margin-bottom: 0; }
         .table-custom th { border: none; color: #7f8c8d; font-weight: 500; padding: 8px 5px; }
         .table-custom td { border-bottom: 1px solid #f1f2f6; padding: 8px 5px; vertical-align: middle; }
-        
         .badge-glass { border-radius: 6px; padding: 4px 8px; font-weight: 500; font-size: 0.7rem; }
         .btn-glass { background: #f4f7f6; border: none; border-radius: 8px; padding: 6px 12px; font-size: 0.8rem; font-weight: 500; transition: 0.3s; }
         .btn-glass:hover { background: #e0e6ed; }
-        
-        .alert-panel {
-            background: #fff3cd;
-            border-left: 5px solid #ffc107;
-            border-radius: 10px;
-            padding: 15px 20px;
-            margin-bottom: 25px;
-            box-shadow: 0 4px 10px rgba(0,0,0,0.05);
-        }
-        .alert-panel-title {
-            font-weight: 700;
-            font-size: 1rem;
-            color: #856404;
-            margin-bottom: 10px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .alert-item {
-            font-size: 0.85rem;
-            padding: 6px 0;
-            border-bottom: 1px dashed rgba(0,0,0,0.1);
-            display: flex;
-            justify-content: space-between;
-        }
+        .alert-panel { background: #fff3cd; border-left: 5px solid #ffc107; border-radius: 10px; padding: 15px 20px; margin-bottom: 25px; box-shadow: 0 4px 10px rgba(0,0,0,0.05); }
+        .alert-panel-title { font-weight: 700; font-size: 1rem; color: #856404; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
+        .alert-item { font-size: 0.85rem; padding: 6px 0; border-bottom: 1px dashed rgba(0,0,0,0.1); display: flex; justify-content: space-between; }
         .alert-item:last-child { border-bottom: none; }
-        
+        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .top-bar h3 { font-weight: 600; margin: 0; font-size: 1.3rem; }
         @media (max-width: 768px) {
             .sidebar { width: 100%; height: auto; position: relative; border-radius: 0; }
             .main-content { margin-left: 0; padding: 15px; }
+            .firma-selector select { min-width: 100%; }
         }
     </style>
 </head>
 <body>
 
     <div class="sidebar">
-        <h4>🦺 İSG TAKİP</h4>
-        <a href="/" class="active"><i class="bi bi-grid-1x2-fill"></i> Panel</a>
-        <a href="/egitimler"><i class="bi bi-mortarboard-fill"></i> Eğitimler</a>
-        <a href="/egitim/ekle"><i class="bi bi-plus-circle-fill"></i> + Eğitim Ekle</a>
-        <a href="/kazalar"><i class="bi bi-exclamation-triangle-fill"></i> Kazalar</a>
-        <a href="/kaza/ekle"><i class="bi bi-plus-circle-fill"></i> + Kaza Ekle</a>
-        <a href="/planlar"><i class="bi bi-journal-check"></i> Tüm Planlar</a>
-        <a href="/plan/ekle"><i class="bi bi-plus-circle-fill"></i> + Plan Ekle</a>
+        <h4>İSG TAKİP</h4>
+        <div class="sidebar-menu">
+            <a href="/" class="active"><i class="bi bi-grid-1x2-fill"></i> Panel</a>
+            <a href="/firma_degistir"><i class="bi bi-arrow-left-right"></i> Firma Değiştir</a>
+            <a href="/tum_firmalar"><i class="bi bi-buildings"></i> Tüm Firmalar Özet</a>
+            <a href="/egitimler"><i class="bi bi-mortarboard-fill"></i> Eğitimler</a>
+            <a href="/egitim/ekle"><i class="bi bi-plus-circle-fill"></i> + Eğitim Ekle</a>
+            <a href="/kazalar"><i class="bi bi-exclamation-triangle-fill"></i> Kazalar</a>
+            <a href="/kaza/ekle"><i class="bi bi-plus-circle-fill"></i> + Kaza Ekle</a>
+            <a href="/planlar"><i class="bi bi-journal-check"></i> Tüm Planlar</a>
+            <a href="/plan/ekle"><i class="bi bi-plus-circle-fill"></i> + Plan Ekle</a>
+        </div>
+        <div class="sidebar-bottom" style="border-top: 1px solid rgba(255,255,255,0.2); padding-top: 15px;">
+            <a href="/cikis" style="color: #ffb3b3;"><i class="bi bi-box-arrow-right"></i> Çıkış Yap</a>
+        </div>
     </div>
 
     <div class="main-content">
-        <div class="top-bar">
-            <h3>Dashboard</h3>
-            <div class="d-flex align-items-center gap-3">
-                <span class="text-muted" style="font-size:0.85rem;">Hoş Geldiniz</span>
-                <div class="bg-primary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:35px; height:35px; font-weight:bold; font-size:0.8rem;">İSG</div>
+        {% if session.get('firma_adi') %}
+        <div class="firma-selector">
+            <div>
+                <span class="label"><i class="bi bi-building"></i> Aktif Firma</span>
+                <select onchange="window.location='/firma_sec/'+encodeURIComponent(this.value)">
+                    {% for f in firmalar %}
+                        <option value="{{ f }}" {% if session.get('firma_adi') == f %}selected{% endif %}>{{ f }}</option>
+                    {% endfor %}
+                    <option value="TÜM FİRMALAR" {% if session.get('firma_adi') == 'TÜM FİRMALAR' %}selected{% endif %}>⭐ TÜM FİRMALAR</option>
+                </select>
+            </div>
+            <div class="info">
+                <i class="bi bi-info-circle"></i> Veriler sadece seçili firmaya aittir. Değiştirmek için yukarıdaki menüyü kullanın.
             </div>
         </div>
+        {% endif %}
+        
         {% block content %}{% endblock %}
     </div>
 
@@ -258,9 +224,192 @@ BASE_HTML = """
 </html>
 """
 
+# ---------------- GİRİŞ EKRANI ----------------
+GIRIS_HTML = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Giriş - İSG TAKİP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; font-family: 'Poppins', sans-serif; }
+        .login-card { background: white; border-radius: 20px; padding: 40px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); width: 100%; max-width: 400px; }
+        .login-card h2 { text-align: center; font-weight: 700; margin-bottom: 10px; color: #1e3c72; }
+        .login-card .subtitle { text-align: center; color: #7f8c8d; font-size: 0.85rem; margin-bottom: 30px; }
+        .login-card label { font-size: 0.85rem; font-weight: 500; color: #34495e; }
+        .login-card input { border-radius: 10px; padding: 12px; margin-bottom: 15px; border: 1px solid #e0e6ed; width: 100%; }
+        .login-card input:focus { border-color: #1e3c72; box-shadow: 0 0 0 0.2rem rgba(30,60,114,0.15); }
+        .login-card button { border-radius: 10px; padding: 12px; font-weight: 600; background: #1e3c72; border: none; color: white; width: 100%; transition: 0.3s; }
+        .login-card button:hover { background: #2a5298; }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <h2>İSG TAKİP</h2>
+        <p class="subtitle">Kerim Çağatay Toklu</p>
+        <form method="post" action="/giris">
+            <label>Kullanıcı Adı</label>
+            <input type="text" name="kullanici_adi" placeholder="Kullanıcı adınızı girin" required autofocus>
+            <label>Şifre</label>
+            <input type="password" name="sifre" placeholder="Şifrenizi girin" required>
+            {% if hata %}<div class="alert alert-danger py-2" style="font-size:0.85rem;">{{ hata }}</div>{% endif %}
+            <button type="submit" class="mt-2">Giriş Yap</button>
+        </form>
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/giris', methods=['GET', 'POST'])
+def giris():
+    if request.method == 'POST':
+        kullanici = request.form.get('kullanıcı_adi', request.form.get('kullanici_adi', '')).strip()
+        sifre = request.form.get('sifre', '')
+        if kullanici == KULLANICI_ADI and sifre == SITE_SIFRESI:
+            session['giris_yapildi'] = True
+            session['kullanici_adi'] = kullanici
+            return redirect(url_for('firma_secim_sayfasi'))
+        else:
+            return render_template_string(GIRIS_HTML, hata="Kullanıcı adı veya şifre hatalı!")
+    return render_template_string(GIRIS_HTML, hata=None)
+
+@app.route('/cikis')
+def cikis():
+    session.clear()
+    return redirect(url_for('giris'))
+
+# ---------------- FİRMA SEÇİM SAYFASI ----------------
+FIRMA_SECIM_HTML = """
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <title>Firma Seç - İSG TAKİP</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        body { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); min-height: 100vh; padding: 40px 15px; font-family: 'Poppins', sans-serif; }
+        h2 { text-align: center; color: white; font-weight: 700; margin-bottom: 10px; }
+        .subtitle { text-align: center; color: rgba(255,255,255,0.7); margin-bottom: 40px; font-size: 0.9rem; }
+        .firma-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; max-width: 900px; margin: 0 auto; }
+        .firma-card { background: white; border-radius: 20px; padding: 30px 25px; text-align: center; cursor: pointer; transition: 0.3s; box-shadow: 0 10px 30px rgba(0,0,0,0.2); }
+        .firma-card:hover { transform: translateY(-5px); box-shadow: 0 20px 40px rgba(0,0,0,0.3); }
+        .firma-card .icon { font-size: 3rem; color: #2a5298; margin-bottom: 15px; }
+        .firma-card .name { font-weight: 700; font-size: 1.1rem; color: #2c3e50; }
+        .firma-card .desc { font-size: 0.8rem; color: #7f8c8d; margin-top: 8px; }
+        .firma-card.super { background: linear-gradient(135deg, #f39c12 0%, #e67e22 100%); }
+        .firma-card.super .icon, .firma-card.super .name, .firma-card.super .desc { color: white; }
+        .firma-card.super .desc { color: rgba(255,255,255,0.9); }
+        .logout-link { text-align: center; margin-top: 40px; }
+        .logout-link a { color: rgba(255,255,255,0.8); text-decoration: none; font-size: 0.9rem; }
+        .logout-link a:hover { color: white; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>İSG TAKİP</h2>
+        <p class="subtitle">Yönetmek istediğiniz firmayı seçin</p>
+        <div class="firma-grid">
+            {% for f in firmalar %}
+            <a href="/firma_sec/{{ f }}" class="text-decoration-none">
+                <div class="firma-card">
+                    <div class="icon"><i class="bi bi-building"></i></div>
+                    <div class="name">{{ f }}</div>
+                    <div class="desc">Verileri yönetmek için tıkla</div>
+                </div>
+            </a>
+            {% endfor %}
+            <a href="/firma_sec/TÜM FİRMALAR" class="text-decoration-none">
+                <div class="firma-card super">
+                    <div class="icon"><i class="bi bi-buildings"></i></div>
+                    <div class="name">TÜM FİRMALAR</div>
+                    <div class="desc">Bütün verileri bir arada görüntüle</div>
+                </div>
+            </a>
+        </div>
+        <div class="logout-link">
+            <a href="/cikis"><i class="bi bi-box-arrow-right"></i> Çıkış Yap</a>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
+@app.route('/firma_secim')
+def firma_secim_sayfasi():
+    if not session.get('giris_yapildi'):
+        return redirect(url_for('giris'))
+    return render_template_string(FIRMA_SECIM_HTML, firmalar=FIRMALAR)
+
+@app.route('/firma_sec/<path:firma>')
+def firma_sec(firma):
+    if not session.get('giris_yapildi'):
+        return redirect(url_for('giris'))
+    session['firma_adi'] = firma
+    return redirect(url_for('dashboard'))
+
+@app.route('/firma_degistir')
+def firma_degistir():
+    return redirect(url_for('firma_secim_sayfasi'))
+
+# ---------------- GİRİŞ KONTROLÜ ----------------
+@app.before_request
+def giris_kontrol():
+    izinli = ['giris', 'static', 'firma_secim_sayfasi', 'firma_sec', 'firma_degistir']
+    if request.endpoint in izinli:
+        return None
+    if not session.get('giris_yapildi'):
+        return redirect(url_for('giris'))
+    # Firma seçilmediyse firma seçim sayfasına yönlendir
+    if not session.get('firma_adi') and request.endpoint != 'firma_secim_sayfasi':
+        return redirect(url_for('firma_secim_sayfasi'))
+
+# ---------------- YARDIMCI FONKSİYONLAR ----------------
+def aktif_firma():
+    return session.get('firma_adi', '')
+
+def firma_filtre(query):
+    firma = aktif_firma()
+    if firma != 'TÜM FİRMALAR':
+        return query.filter_by(firma_adi=firma)
+    return query
+
+def get_personeller(firma=None):
+    if not firma: firma = aktif_firma()
+    q1 = db.session.query(Egitim.personel_adi)
+    q2 = db.session.query(IsKazasi.personel_adi)
+    if firma != 'TÜM FİRMALAR':
+        q1 = q1.filter(Egitim.firma_adi == firma)
+        q2 = q2.filter(IsKazasi.firma_adi == firma)
+    personeller = q1.distinct().all()
+    kaza_personeller = q2.distinct().all()
+    tum = set([p[0] for p in personeller if p[0]] + [p[0] for p in kaza_personeller if p[0]])
+    return sorted(list(tum))
+
+def hesapla_gecerlilik(tarih, tehlike_sinifi):
+    if not tarih or not tehlike_sinifi: return None
+    if tehlike_sinifi == "Az Tehlikeli": return tarih + relativedelta(years=6)
+    elif tehlike_sinifi == "Tehlikeli": return tarih + relativedelta(years=4)
+    elif tehlike_sinifi == "Çok Tehlikeli": return tarih + relativedelta(years=2)
+    return None
+
+def resim_kaydet(resim_dosyasi):
+    if resim_dosyasi and resim_dosyasi.filename != '':
+        filename = secure_filename(resim_dosyasi.filename)
+        benzersiz_isim = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
+        resim_dosyasi.save(os.path.join(app.config['UPLOAD_FOLDER'], benzersiz_isim))
+        return benzersiz_isim
+    return None
+
+def resim_sil(resim_adi):
+    if resim_adi:
+        dosya_yolu = os.path.join(app.config['UPLOAD_FOLDER'], resim_adi)
+        if os.path.exists(dosya_yolu):
+            os.remove(dosya_yolu)
+
 # ---------------- SAYFA İÇERİKLERİ ----------------
 DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
-    <!-- UYARILAR PANELİ -->
     {% if uyarilar %}
     <div class="alert-panel">
         <div class="alert-panel-title"><i class="bi bi-exclamation-triangle-fill"></i> Güncelleme / Yenileme Uyarıları</div>
@@ -274,7 +423,6 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
     {% endif %}
 
     <div class="row g-3 mb-4">
-        <!-- 1. WIDGET: RİSK DEĞERLENDİRME -->
         <div class="col-md-6">
             <div class="widget-card widget-rd">
                 <div class="widget-header">
@@ -304,8 +452,6 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                 </div>
             </div>
         </div>
-
-        <!-- 2. WIDGET: ACİL DURUM PLANI -->
         <div class="col-md-6">
             <div class="widget-card widget-adp">
                 <div class="widget-header">
@@ -335,8 +481,6 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                 </div>
             </div>
         </div>
-
-        <!-- 3. WIDGET: EĞİTİM PLANI -->
         <div class="col-md-6">
             <div class="widget-card widget-egitim-plan">
                 <div class="widget-header">
@@ -366,8 +510,6 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                 </div>
             </div>
         </div>
-
-        <!-- 4. WIDGET: ÇALIŞMA PLANI -->
         <div class="col-md-6">
             <div class="widget-card widget-calisma-plan">
                 <div class="widget-header">
@@ -399,7 +541,6 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
         </div>
     </div>
 
-    <!-- EĞİTİM DURUMLARI -->
     <h5 class="mb-3 fw-bold" style="font-size:1rem;">Eğitim Takip Özeti</h5>
     <div class="row g-3">
         <div class="col-md-6">
@@ -410,10 +551,7 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                 </div>
                 {% for e in suresi_gecenler %}
                 <div class="mini-card danger">
-                    <div>
-                        <div class="mini-card-title">{{ e.personel_adi }}</div>
-                        <div class="mini-card-sub">{{ e.egitim_adi }}</div>
-                    </div>
+                    <div><div class="mini-card-title">{{ e.personel_adi }}</div><div class="mini-card-sub">{{ e.egitim_adi }}</div></div>
                     <div class="text-danger mini-card-date">{{ e.son_gecerlilik.strftime('%d.%m.%Y') }}</div>
                 </div>
                 {% else %}
@@ -421,7 +559,6 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                 {% endfor %}
             </div>
         </div>
-
         <div class="col-md-6">
             <div class="widget-card" style="border-left-color: #f39c12; padding: 15px;">
                 <div class="widget-header mb-2">
@@ -430,10 +567,7 @@ DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                 </div>
                 {% for e in yaklasan_egitimler %}
                 <div class="mini-card warning">
-                    <div>
-                        <div class="mini-card-title">{{ e.personel_adi }}</div>
-                        <div class="mini-card-sub">{{ e.egitim_adi }}</div>
-                    </div>
+                    <div><div class="mini-card-title">{{ e.personel_adi }}</div><div class="mini-card-sub">{{ e.egitim_adi }}</div></div>
                     <div class="text-warning mini-card-date">{{ e.son_gecerlilik.strftime('%d.%m.%Y') }}</div>
                 </div>
                 {% else %}
@@ -449,7 +583,6 @@ PLANLAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
         <h3 class="mb-0 fw-bold" style="font-size: 1.1rem;">Tüm Planlar</h3>
         <a href="/plan/ekle" class="btn btn-primary rounded-pill px-3 py-1" style="font-size:0.8rem;">+ Yeni Plan Ekle</a>
     </div>
-    
     <div class="widget-card p-0 overflow-hidden" style="border-left:none;">
         <div class="table-responsive">
             <table class="table table-custom align-middle mb-0">
@@ -473,7 +606,6 @@ PLANLAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                     {% for plan in planlar %}
                     <tr>
                         <td class="border-end ps-3"><strong>{{ plan.firma_adi }}</strong></td>
-                        
                         <td class="text-center">{{ plan.rd_tarihi.strftime('%d.%m.%Y') if plan.rd_tarihi else '-' }}</td>
                         <td class="text-center">{{ plan.rd_tehlike_sinifi or '-' }}</td>
                         <td class="text-center border-end">
@@ -482,7 +614,6 @@ PLANLAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                                 {% else %}<span class="badge bg-success badge-glass">{{ plan.rd_gecerlilik.strftime('%d.%m.%Y') }}</span>{% endif %}
                             {% else %}-{% endif %}
                         </td>
-                        
                         <td class="text-center">{{ plan.adp_tarihi.strftime('%d.%m.%Y') if plan.adp_tarihi else '-' }}</td>
                         <td class="text-center">{{ plan.adp_tehlike_sinifi or '-' }}</td>
                         <td class="text-center border-end">
@@ -491,7 +622,6 @@ PLANLAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                                 {% else %}<span class="badge bg-success badge-glass">{{ plan.adp_gecerlilik.strftime('%d.%m.%Y') }}</span>{% endif %}
                             {% else %}-{% endif %}
                         </td>
-                        
                         <td class="text-center">{{ plan.egitim_plani_tarihi.strftime('%d.%m.%Y') if plan.egitim_plani_tarihi else '-' }}</td>
                         <td class="text-center">{{ plan.egitim_tehlike_sinifi or '-' }}</td>
                         <td class="text-center border-end">
@@ -500,7 +630,6 @@ PLANLAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                                 {% else %}<span class="badge bg-success badge-glass">{{ plan.egitim_plani_gecerlilik.strftime('%d.%m.%Y') }}</span>{% endif %}
                             {% else %}-{% endif %}
                         </td>
-                        
                         <td class="text-center">{{ plan.calisma_plani_tarihi.strftime('%d.%m.%Y') if plan.calisma_plani_tarihi else '-' }}</td>
                         <td class="text-center">{{ plan.calisma_tehlike_sinifi or '-' }}</td>
                         <td class="text-center border-end">
@@ -509,7 +638,6 @@ PLANLAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                                 {% else %}<span class="badge bg-success badge-glass">{{ plan.calisma_plani_gecerlilik.strftime('%d.%m.%Y') }}</span>{% endif %}
                             {% else %}-{% endif %}
                         </td>
-                        
                         <td class="text-center pe-3">
                             <a href="/plan/duzenle/{{ plan.id }}" class="btn-glass text-decoration-none text-primary"><i class="bi bi-pencil-square"></i></a>
                             <a href="/plan/sil/{{ plan.id }}" class="btn-glass text-decoration-none text-danger" onclick="return confirm('Silmek istediğinize emin misiniz?')"><i class="bi bi-trash"></i></a>
@@ -529,23 +657,15 @@ EGITIMLER_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
         <h3 class="mb-0 fw-bold" style="font-size: 1.1rem;">Eğitim Listesi</h3>
         <div class="d-flex gap-2 align-items-center flex-nowrap">
             <form method="get" class="d-flex gap-2 align-items-center m-0">
-                <select name="firma" class="form-select border-0 shadow-sm" style="width: auto; font-size:0.8rem; padding: 6px 12px; border-radius: 8px;" onchange="this.form.submit()">
-                    <option value="">Tüm Firmalar</option>
-                    {% for f in firmalar %}
-                        <option value="{{ f }}" {% if secili_firma == f %}selected{% endif %}>{{ f }}</option>
-                    {% endfor %}
-                </select>
-                
                 <select name="siralama" class="form-select border-0 shadow-sm" style="width: auto; font-size:0.8rem; padding: 6px 12px; border-radius: 8px;" onchange="this.form.submit()">
                     <option value="yeni" {% if siralama == 'yeni' %}selected{% endif %}>En Yeni</option>
                     <option value="eski" {% if siralama == 'eski' %}selected{% endif %}>En Eski</option>
                 </select>
             </form>
-            <a href="/egitimler/excel?firma={{ secili_firma }}&siralama={{ siralama }}" class="btn btn-success text-nowrap rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+            <a href="/egitimler/excel?siralama={{ siralama }}" class="btn btn-success text-nowrap rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-file-earmark-excel"></i> Excel</a>
             <a href="/egitim/ekle" class="btn btn-primary text-nowrap rounded-pill px-3" style="font-size:0.8rem;">+ Eğitim</a>
         </div>
     </div>
-    
     <div class="widget-card p-0 overflow-hidden" style="border-left:none;">
         <div class="table-responsive">
             <table class="table table-custom align-middle table-hover mb-0">
@@ -560,11 +680,8 @@ EGITIMLER_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                     <tr class="clickable-row" onclick="window.location='/personel_detay/{{ e.personel_adi }}'">
                         <td class="ps-3">{{ loop.index }}</td>
                         <td>
-                            {% if e.resim %}
-                                <img src="{{ url_for('static', filename='uploads/' + e.resim) }}" class="rounded-circle" style="width:30px; height:30px; object-fit:cover;">
-                            {% else %}
-                                <div class="bg-secondary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:30px; height:30px; font-size:10px;">?</div>
-                            {% endif %}
+                            {% if e.resim %}<img src="{{ url_for('static', filename='uploads/' + e.resim) }}" class="rounded-circle" style="width:30px; height:30px; object-fit:cover;">
+                            {% else %}<div class="bg-secondary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:30px; height:30px; font-size:10px;">?</div>{% endif %}
                         </td>
                         <td>{{ e.firma_adi }}</td>
                         <td class="fw-bold">{{ e.personel_adi }}</td>
@@ -574,22 +691,14 @@ EGITIMLER_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                         <td>{{ e.egitim_tarihi.strftime('%d.%m.%Y') }}</td>
                         <td>{{ e.son_gecerlilik.strftime('%d.%m.%Y') }}</td>
                         <td>
-                            {% if e.durum == 'SÜRESİ GEÇMİŞ' %}
-                                <span class="badge bg-danger badge-glass">Geçmiş</span>
-                            {% elif e.durum == 'YAKLAŞIYOR' %}
-                                <span class="badge bg-warning text-dark badge-glass">Yaklaşıyor</span>
-                            {% else %}
-                                <span class="badge bg-success badge-glass">Geçerli</span>
-                            {% endif %}
+                            {% if e.durum == 'SÜRESİ GEÇMİŞ' %}<span class="badge bg-danger badge-glass">Geçmiş</span>
+                            {% elif e.durum == 'YAKLAŞIYOR' %}<span class="badge bg-warning text-dark badge-glass">Yaklaşıyor</span>
+                            {% else %}<span class="badge bg-success badge-glass">Geçerli</span>{% endif %}
                         </td>
                         <td>
-                            <!-- DÜZELTME: Kaza kontrolü için personel adı küçük harflere çevrilerek karşılaştırılıyor -->
                             {% set kaza_var = kazalar_dict.get(e.personel_adi.lower().strip()) %}
-                            {% if kaza_var %}
-                                <span class="badge bg-danger badge-glass">⚠️ Kaza ({{ kaza_var }})</span>
-                            {% else %}
-                                <span class="badge bg-light text-dark border badge-glass">Yok</span>
-                            {% endif %}
+                            {% if kaza_var %}<span class="badge bg-danger badge-glass">⚠️ ({{ kaza_var }})</span>
+                            {% else %}<span class="badge bg-light text-dark border badge-glass">Yok</span>{% endif %}
                         </td>
                         <td class="pe-3" onclick="event.stopPropagation();">
                             <a href="/egitim/duzenle/{{ e.id }}" class="btn-glass text-decoration-none text-primary"><i class="bi bi-pencil-square"></i></a>
@@ -608,23 +717,15 @@ KAZALAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
         <h3 class="mb-0 fw-bold" style="font-size: 1.1rem;">İş Kazaları Listesi</h3>
         <div class="d-flex gap-2 align-items-center flex-nowrap">
             <form method="get" class="d-flex gap-2 align-items-center m-0">
-                <select name="firma" class="form-select border-0 shadow-sm" style="width: auto; font-size:0.8rem; padding: 6px 12px; border-radius: 8px;" onchange="this.form.submit()">
-                    <option value="">Tüm Firmalar</option>
-                    {% for f in firmalar %}
-                        <option value="{{ f }}" {% if secili_firma == f %}selected{% endif %}>{{ f }}</option>
-                    {% endfor %}
-                </select>
-
                 <select name="siralama" class="form-select border-0 shadow-sm" style="width: auto; font-size:0.8rem; padding: 6px 12px; border-radius: 8px;" onchange="this.form.submit()">
                     <option value="yeni" {% if siralama == 'yeni' %}selected{% endif %}>En Yeni</option>
                     <option value="eski" {% if siralama == 'eski' %}selected{% endif %}>En Eski</option>
                 </select>
             </form>
-            <a href="/kazalar/excel?firma={{ secili_firma }}&siralama={{ siralama }}" class="btn btn-success text-nowrap rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+            <a href="/kazalar/excel?siralama={{ siralama }}" class="btn btn-success text-nowrap rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-file-earmark-excel"></i> Excel</a>
             <a href="/kaza/ekle" class="btn btn-danger text-nowrap rounded-pill px-3" style="font-size:0.8rem;">+ Kaza</a>
         </div>
     </div>
-    
     <div class="widget-card p-0 overflow-hidden" style="border-left:none;">
         <div class="table-responsive">
             <table class="table table-custom align-middle table-hover mb-0">
@@ -661,15 +762,11 @@ KAZALAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
 
 PERSONEL_DETAY_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
     <a href="/egitimler" class="btn btn-light mb-3 rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-arrow-left"></i> Listeye Dön</a>
-    
     <div class="widget-card mb-3" style="border-left: 5px solid #3498db;">
         <div class="d-flex align-items-center">
             {% set kisi = personel_bilgi %}
-            {% if kisi and kisi.resim %}
-                <img src="{{ url_for('static', filename='uploads/' + kisi.resim) }}" class="rounded-circle me-3" style="width:70px; height:70px; object-fit:cover; border:3px solid #f0f2f5;">
-            {% else %}
-                <div class="bg-secondary text-white rounded-circle d-flex align-items-center justify-content-center me-3" style="width:70px; height:70px; font-size:24px;">?</div>
-            {% endif %}
+            {% if kisi and kisi.resim %}<img src="{{ url_for('static', filename='uploads/' + kisi.resim) }}" class="rounded-circle me-3" style="width:70px; height:70px; object-fit:cover; border:3px solid #f0f2f5;">
+            {% else %}<div class="bg-secondary text-white rounded-circle d-flex align-items-center justify-content-center me-3" style="width:70px; height:70px; font-size:24px;">?</div>{% endif %}
             <div>
                 <h4 class="mb-1 fw-bold">{{ personel_adi }}</h4>
                 <h6 class="text-primary mb-1" style="font-size:0.85rem;">{{ personel_bilgi.firma_adi if personel_bilgi else '-' }} - {{ personel_bilgi.gorevi if personel_bilgi and personel_bilgi.gorevi else 'Görev Belirtilmemiş' }}</h6>
@@ -677,32 +774,24 @@ PERSONEL_DETAY_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
             </div>
         </div>
     </div>
-
     <div class="row">
         <div class="col-md-12">
             <h6 class="text-info border-bottom pb-2 mb-2 fw-bold" style="font-size:0.9rem;"><i class="bi bi-mortarboard-fill"></i> Eğitim Geçmişi</h6>
-            
             {% if egitimler %}
                 <div class="widget-card p-0 overflow-hidden mb-3" style="border-left:none;">
                     <div class="table-responsive">
                         <table class="table table-custom align-middle mb-0">
-                            <thead style="background:#f8f9fa;">
-                                <tr>
-                                    <th class="ps-3" style="font-size:0.75rem;">Eğitim Adı</th><th style="font-size:0.75rem;">Eğitim Tarihi</th><th style="font-size:0.75rem;">Geçerlilik (Ay)</th><th style="font-size:0.75rem;">Son Geçerlilik</th><th style="font-size:0.75rem;">Sertifika No</th><th class="pe-3" style="font-size:0.75rem;">Durum</th>
-                                </tr>
-                            </thead>
+                            <thead style="background:#f8f9fa;"><tr>
+                                <th class="ps-3" style="font-size:0.75rem;">Eğitim Adı</th><th style="font-size:0.75rem;">Eğitim Tarihi</th><th style="font-size:0.75rem;">Geçerlilik (Ay)</th><th style="font-size:0.75rem;">Son Geçerlilik</th><th style="font-size:0.75rem;">Sertifika No</th><th class="pe-3" style="font-size:0.75rem;">Durum</th>
+                            </tr></thead>
                             <tbody>
                                 {% for e in egitimler %}
                                 <tr>
                                     <td class="ps-3">{{ e.egitim_adi }}</td><td>{{ e.egitim_tarihi.strftime('%d.%m.%Y') }}</td><td>{{ e.gecerlilik_ay }}</td><td>{{ e.son_gecerlilik.strftime('%d.%m.%Y') }}</td><td>{{ e.sertifika_no or '-' }}</td>
                                     <td class="pe-3">
-                                        {% if e.durum == 'SÜRESİ GEÇMİŞ' %}
-                                            <span class="badge bg-danger badge-glass">Süresi Geçmiş</span>
-                                        {% elif e.durum == 'YAKLAŞIYOR' %}
-                                            <span class="badge bg-warning text-dark badge-glass">Yaklaşıyor</span>
-                                        {% else %}
-                                            <span class="badge bg-success badge-glass">Geçerli</span>
-                                        {% endif %}
+                                        {% if e.durum == 'SÜRESİ GEÇMİŞ' %}<span class="badge bg-danger badge-glass">Süresi Geçmiş</span>
+                                        {% elif e.durum == 'YAKLAŞIYOR' %}<span class="badge bg-warning text-dark badge-glass">Yaklaşıyor</span>
+                                        {% else %}<span class="badge bg-success badge-glass">Geçerli</span>{% endif %}
                                     </td>
                                 </tr>
                                 {% endfor %}
@@ -710,26 +799,20 @@ PERSONEL_DETAY_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                         </table>
                     </div>
                 </div>
-            {% else %}
-                <div class="alert alert-info py-2" style="font-size:0.8rem;">Bu personelin kayıtlı eğitimi bulunmuyor.</div>
-            {% endif %}
+            {% else %}<div class="alert alert-info py-2" style="font-size:0.8rem;">Bu personelin kayıtlı eğitimi bulunmuyor.</div>{% endif %}
         </div>
     </div>
-
     <div class="row mt-3">
         <div class="col-md-12">
             <h6 class="text-danger border-bottom pb-2 mb-2 fw-bold" style="font-size:0.9rem;"><i class="bi bi-exclamation-triangle-fill"></i> İş Kazası Geçmişi</h6>
-            
             {% if kazalar %}
                 <div class="widget-card p-0 overflow-hidden" style="border-left:none;">
                     <div class="table-responsive">
                         <table class="table table-custom align-middle mb-0">
-                            <thead style="background:#f8f9fa;">
-                                <tr>
-                                    <th class="ps-3" style="font-size:0.75rem;">Tarih</th><th style="font-size:0.75rem;">Kaza Yeri</th><th style="font-size:0.75rem;">Yaralanma Türü</th><th style="font-size:0.75rem;">Açıklama</th><th style="font-size:0.75rem;">Kök Neden</th><th style="font-size:0.75rem;">Düzeltici Faaliyet</th>
-                                    <th style="font-size:0.75rem;">SGK Bildirim</th><th style="font-size:0.75rem;">Rapor Gün</th><th class="pe-3" style="font-size:0.75rem;">Kaza Sonrası Eğitim</th>
-                                </tr>
-                            </thead>
+                            <thead style="background:#f8f9fa;"><tr>
+                                <th class="ps-3" style="font-size:0.75rem;">Tarih</th><th style="font-size:0.75rem;">Kaza Yeri</th><th style="font-size:0.75rem;">Yaralanma Türü</th><th style="font-size:0.75rem;">Açıklama</th><th style="font-size:0.75rem;">Kök Neden</th><th style="font-size:0.75rem;">Düzeltici Faaliyet</th>
+                                <th style="font-size:0.75rem;">SGK Bildirim</th><th style="font-size:0.75rem;">Rapor Gün</th><th class="pe-3" style="font-size:0.75rem;">Kaza Sonrası Eğitim</th>
+                            </tr></thead>
                             <tbody>
                                 {% for k in kazalar %}
                                 <tr>
@@ -743,11 +826,7 @@ PERSONEL_DETAY_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                         </table>
                     </div>
                 </div>
-            {% else %}
-                <div class="alert alert-success py-2" style="font-size:0.8rem;">
-                    <i class="bi bi-check-circle-fill"></i> Bu personelin kayıtlı bir iş kazası bulunmuyor.
-                </div>
-            {% endif %}
+            {% else %}<div class="alert alert-success py-2" style="font-size:0.8rem;"><i class="bi bi-check-circle-fill"></i> Bu personelin kayıtlı bir iş kazası bulunmuyor.</div>{% endif %}
         </div>
     </div>
 """)
@@ -759,9 +838,8 @@ EGITIM_EKLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Personel ve Firma</h6>
-                    <label class="form-label" style="font-size:0.8rem;">Firma Adı</label>
-                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="firma_adi" list="firma_listesi" placeholder="Firma seçin veya yazın" required>
-                    <datalist id="firma_listesi">{% for f in firmalar %}<option value="{{ f }}">{% endfor %}</datalist>
+                    <label class="form-label" style="font-size:0.8rem;">Firma</label>
+                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" value="{{ session.get('firma_adi') }}" disabled style="background:#e8f4ff; font-weight:600;">
 
                     <label class="form-label" style="font-size:0.8rem;">Personel Adı Soyadı</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="personel_adi" list="personel_listesi" placeholder="Personel seçin veya yazın" required>
@@ -776,7 +854,6 @@ EGITIM_EKLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                     <label class="form-label" style="font-size:0.8rem;">Fotoğraf</label>
                     <input class="form-control border-0 shadow-sm form-control-sm" type="file" name="resim" accept="image/*">
                 </div>
-                
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Eğitim Bilgileri</h6>
                     <label class="form-label" style="font-size:0.8rem;">Eğitim Adı</label>
@@ -804,7 +881,6 @@ EGITIM_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Personel ve Firma</h6>
-                    
                     {% if e.resim %}
                         <div class="mb-2 text-center">
                             <img src="{{ url_for('static', filename='uploads/' + e.resim) }}" class="rounded-circle mb-2" style="width:70px; height:70px; object-fit:cover;">
@@ -814,36 +890,26 @@ EGITIM_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                             </div>
                         </div>
                     {% endif %}
-                    
                     <label class="form-label" style="font-size:0.8rem;">Yeni Fotoğraf</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="file" name="resim" accept="image/*">
-                    
-                    <label class="form-label" style="font-size:0.8rem;">Firma Adı</label>
-                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="firma_adi" list="firma_listesi" value="{{ e.firma_adi }}" required>
-                    <datalist id="firma_listesi">{% for f in firmalar %}<option value="{{ f }}">{% endfor %}</datalist>
-
+                    <label class="form-label" style="font-size:0.8rem;">Firma</label>
+                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" value="{{ e.firma_adi }}" disabled style="background:#e8f4ff; font-weight:600;">
                     <label class="form-label" style="font-size:0.8rem;">Personel Adı</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="personel_adi" list="personel_listesi" value="{{ e.personel_adi }}" required>
                     <datalist id="personel_listesi">{% for p in personeller %}<option value="{{ p }}">{% endfor %}</datalist>
-
                     <label class="form-label" style="font-size:0.8rem;">Görevi</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="gorevi" value="{{ e.gorevi or '' }}">
-                    
                     <label class="form-label" style="font-size:0.8rem;">İşe Giriş</label>
                     <input class="form-control border-0 shadow-sm form-control-sm" type="date" name="ise_giris" value="{{ e.ise_giris }}">
                 </div>
-                
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Eğitim Bilgileri</h6>
                     <label class="form-label" style="font-size:0.8rem;">Eğitim Adı</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="egitim_adi" value="{{ e.egitim_adi }}" required>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Eğitim Tarihi</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="egitim_tarihi" value="{{ e.egitim_tarihi }}" required>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Geçerlilik (Ay)</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="number" name="gecerlilik_ay" value="{{ e.gecerlilik_ay }}" required>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Sertifika No</label>
                     <input class="form-control border-0 shadow-sm form-control-sm" name="sertifika_no" value="{{ e.sertifika_no or '' }}">
                 </div>
@@ -861,45 +927,33 @@ KAZA_EKLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Kaza Bilgileri</h6>
-                    <label class="form-label" style="font-size:0.8rem;">Firma Adı</label>
-                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="firma_adi" list="firma_listesi" placeholder="Firma seçin veya yazın" required>
-                    <datalist id="firma_listesi">{% for f in firmalar %}<option value="{{ f }}">{% endfor %}</datalist>
-
+                    <label class="form-label" style="font-size:0.8rem;">Firma</label>
+                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" value="{{ session.get('firma_adi') }}" disabled style="background:#e8f4ff; font-weight:600;">
                     <label class="form-label" style="font-size:0.8rem;">Personel Adı</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="personel_adi" list="personel_listesi" placeholder="Personel seçin veya yazın" required>
                     <datalist id="personel_listesi">{% for p in personeller %}<option value="{{ p }}">{% endfor %}</datalist>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Tarih</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="tarih" required>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Kaza Yeri</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="yer" placeholder="Kaza yeri">
-                    
                     <label class="form-label" style="font-size:0.8rem;">Yaralanma Türü</label>
                     <input class="form-control border-0 shadow-sm form-control-sm" name="yaralanma_turu" placeholder="Örn: El kesiği">
                 </div>
-                
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Yasal ve Sonrası Süreçler</h6>
-                    
                     <label class="form-label" style="font-size:0.8rem;">SGK Bildirim Tarihi</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="sgk_bildirim_tarihi">
-                    
                     <label class="form-label" style="font-size:0.8rem;">Rapor Gün Sayısı</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="number" name="rapor_gun_sayisi" placeholder="Örn: 5">
-                    
                     <label class="form-label" style="font-size:0.8rem;">Kaza Sonrası Eğitim</label>
                     <input class="form-control border-0 shadow-sm form-control-sm" type="date" name="kaza_sonrasi_egitim">
                 </div>
-                
                 <div class="col-md-12 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Açıklama ve Analiz</h6>
                     <label class="form-label" style="font-size:0.8rem;">Açıklama</label>
                     <textarea class="form-control mb-2 border-0 shadow-sm form-control-sm" name="aciklama" rows="2"></textarea>
-
                     <label class="form-label" style="font-size:0.8rem;">Kök Neden</label>
                     <textarea class="form-control mb-2 border-0 shadow-sm form-control-sm" name="kok_neden" rows="2"></textarea>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Düzeltici Faaliyet</label>
                     <textarea class="form-control border-0 shadow-sm form-control-sm" name="duzeltici_faaliyet" rows="2"></textarea>
                 </div>
@@ -916,45 +970,33 @@ KAZA_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Kaza Bilgileri</h6>
-                    <label class="form-label" style="font-size:0.8rem;">Firma Adı</label>
-                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="firma_adi" list="firma_listesi" value="{{ k.firma_adi }}" required>
-                    <datalist id="firma_listesi">{% for f in firmalar %}<option value="{{ f }}">{% endfor %}</datalist>
-
+                    <label class="form-label" style="font-size:0.8rem;">Firma</label>
+                    <input class="form-control mb-2 border-0 shadow-sm form-control-sm" value="{{ k.firma_adi }}" disabled style="background:#e8f4ff; font-weight:600;">
                     <label class="form-label" style="font-size:0.8rem;">Personel Adı</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="personel_adi" list="personel_listesi" value="{{ k.personel_adi }}" required>
                     <datalist id="personel_listesi">{% for p in personeller %}<option value="{{ p }}">{% endfor %}</datalist>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Tarih</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="tarih" value="{{ k.tarih }}" required>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Kaza Yeri</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" name="yer" value="{{ k.yer }}">
-                    
                     <label class="form-label" style="font-size:0.8rem;">Yaralanma Türü</label>
                     <input class="form-control border-0 shadow-sm form-control-sm" name="yaralanma_turu" value="{{ k.yaralanma_turu }}">
                 </div>
-                
                 <div class="col-md-6 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Yasal ve Sonrası Süreçler</h6>
-                    
                     <label class="form-label" style="font-size:0.8rem;">SGK Bildirim Tarihi</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="sgk_bildirim_tarihi" value="{{ k.sgk_bildirim_tarihi }}">
-                    
                     <label class="form-label" style="font-size:0.8rem;">Rapor Gün Sayısı</label>
                     <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="number" name="rapor_gun_sayisi" value="{{ k.rapor_gun_sayisi }}">
-                    
                     <label class="form-label" style="font-size:0.8rem;">Kaza Sonrası Eğitim</label>
                     <input class="form-control border-0 shadow-sm form-control-sm" type="date" name="kaza_sonrasi_egitim" value="{{ k.kaza_sonrasi_egitim }}">
                 </div>
-                
                 <div class="col-md-12 mb-3">
                     <h6 class="text-secondary border-bottom pb-2 mb-3 fw-bold" style="font-size:0.85rem;">Açıklama ve Analiz</h6>
                     <label class="form-label" style="font-size:0.8rem;">Açıklama</label>
                     <textarea class="form-control mb-2 border-0 shadow-sm form-control-sm" name="aciklama" rows="2">{{ k.aciklama }}</textarea>
-
                     <label class="form-label" style="font-size:0.8rem;">Kök Neden</label>
                     <textarea class="form-control mb-2 border-0 shadow-sm form-control-sm" name="kok_neden" rows="2">{{ k.kok_neden }}</textarea>
-                    
                     <label class="form-label" style="font-size:0.8rem;">Düzeltici Faaliyet</label>
                     <textarea class="form-control border-0 shadow-sm form-control-sm" name="duzeltici_faaliyet" rows="2">{{ k.duzeltici_faaliyet }}</textarea>
                 </div>
@@ -971,78 +1013,56 @@ PLAN_EKLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
         <form method="post">
             <div class="row mb-3">
                 <div class="col-md-12">
-                    <label class="form-label fw-bold" style="font-size:0.85rem;">Firma Adı</label>
-                    <input class="form-control border-0 shadow-sm form-control-sm" name="firma_adi" list="firma_listesi" placeholder="Firma adı seçin veya yazın" required>
-                    <datalist id="firma_listesi">{% for f in firmalar %}<option value="{{ f }}">{% endfor %}</datalist>
+                    <label class="form-label fw-bold" style="font-size:0.85rem;">Firma</label>
+                    <input class="form-control border-0 shadow-sm form-control-sm" value="{{ session.get('firma_adi') }}" disabled style="background:#e8f4ff; font-weight:600;">
                 </div>
             </div>
-
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #3498db;">
                         <h6 class="text-primary border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Risk Değerlendirmesi</h6>
                         <label class="form-label" style="font-size:0.75rem;">RD Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="rd_tarihi">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="rd_tehlike_sinifi">
-                            <option value="">Seçiniz...</option>
-                            <option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option>
-                            <option value="Tehlikeli">Tehlikeli (4 Yıl)</option>
-                            <option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
+                            <option value="">Seçiniz...</option><option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option><option value="Tehlikeli">Tehlikeli (4 Yıl)</option><option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
                         </select>
                     </div>
                 </div>
-                
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #e74c3c;">
                         <h6 class="text-danger border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Acil Durum Planı</h6>
                         <label class="form-label" style="font-size:0.75rem;">ADP Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="adp_tarihi">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="adp_tehlike_sinifi">
-                            <option value="">Seçiniz...</option>
-                            <option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option>
-                            <option value="Tehlikeli">Tehlikeli (4 Yıl)</option>
-                            <option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
+                            <option value="">Seçiniz...</option><option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option><option value="Tehlikeli">Tehlikeli (4 Yıl)</option><option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
                         </select>
                     </div>
                 </div>
-
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #1abc9c;">
                         <h6 class="text-info border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Eğitim Planı</h6>
                         <label class="form-label" style="font-size:0.75rem;">Plan Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="egitim_plani_tarihi">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="egitim_tehlike_sinifi">
-                            <option value="">Seçiniz...</option>
-                            <option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option>
-                            <option value="Tehlikeli">Tehlikeli (4 Yıl)</option>
-                            <option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
+                            <option value="">Seçiniz...</option><option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option><option value="Tehlikeli">Tehlikeli (4 Yıl)</option><option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
                         </select>
                     </div>
                 </div>
-
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #34495e;">
                         <h6 class="text-dark border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Çalışma Planı</h6>
                         <label class="form-label" style="font-size:0.75rem;">Plan Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="calisma_plani_tarihi">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="calisma_tehlike_sinifi">
-                            <option value="">Seçiniz...</option>
-                            <option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option>
-                            <option value="Tehlikeli">Tehlikeli (4 Yıl)</option>
-                            <option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
+                            <option value="">Seçiniz...</option><option value="Az Tehlikeli">Az Tehlikeli (6 Yıl)</option><option value="Tehlikeli">Tehlikeli (4 Yıl)</option><option value="Çok Tehlikeli">Çok Tehlikeli (2 Yıl)</option>
                         </select>
                     </div>
                 </div>
             </div>
-            
             <button class="btn btn-primary rounded-pill px-4 py-2 mt-2" style="font-size:0.85rem;">Planı Kaydet</button>
             <a href="/planlar" class="btn btn-light rounded-pill px-4 py-2 mt-2 ms-2" style="font-size:0.85rem;">İptal</a>
         </form>
@@ -1055,19 +1075,16 @@ PLAN_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
         <form method="post">
             <div class="row mb-3">
                 <div class="col-md-12">
-                    <label class="form-label fw-bold" style="font-size:0.85rem;">Firma Adı</label>
-                    <input class="form-control border-0 shadow-sm form-control-sm" name="firma_adi" list="firma_listesi" value="{{ plan.firma_adi }}" required>
-                    <datalist id="firma_listesi">{% for f in firmalar %}<option value="{{ f }}">{% endfor %}</datalist>
+                    <label class="form-label fw-bold" style="font-size:0.85rem;">Firma</label>
+                    <input class="form-control border-0 shadow-sm form-control-sm" value="{{ plan.firma_adi }}" disabled style="background:#e8f4ff; font-weight:600;">
                 </div>
             </div>
-
             <div class="row">
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #3498db;">
                         <h6 class="text-primary border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Risk Değerlendirmesi</h6>
                         <label class="form-label" style="font-size:0.75rem;">RD Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="rd_tarihi" value="{{ plan.rd_tarihi }}">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="rd_tehlike_sinifi">
                             <option value="">Seçiniz...</option>
@@ -1077,13 +1094,11 @@ PLAN_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                         </select>
                     </div>
                 </div>
-                
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #e74c3c;">
                         <h6 class="text-danger border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Acil Durum Planı</h6>
                         <label class="form-label" style="font-size:0.75rem;">ADP Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="adp_tarihi" value="{{ plan.adp_tarihi }}">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="adp_tehlike_sinifi">
                             <option value="">Seçiniz...</option>
@@ -1093,13 +1108,11 @@ PLAN_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                         </select>
                     </div>
                 </div>
-
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #1abc9c;">
                         <h6 class="text-info border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Eğitim Planı</h6>
                         <label class="form-label" style="font-size:0.75rem;">Plan Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="egitim_plani_tarihi" value="{{ plan.egitim_plani_tarihi }}">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="egitim_tehlike_sinifi">
                             <option value="">Seçiniz...</option>
@@ -1109,13 +1122,11 @@ PLAN_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                         </select>
                     </div>
                 </div>
-
                 <div class="col-md-6 mb-3">
                     <div class="p-3 rounded-3" style="background: #f8f9fa; border-left: 4px solid #34495e;">
                         <h6 class="text-dark border-bottom pb-2 mb-2 fw-bold" style="font-size:0.85rem;">Çalışma Planı</h6>
                         <label class="form-label" style="font-size:0.75rem;">Plan Tarihi</label>
                         <input class="form-control mb-2 border-0 shadow-sm form-control-sm" type="date" name="calisma_plani_tarihi" value="{{ plan.calisma_plani_tarihi }}">
-                        
                         <label class="form-label" style="font-size:0.75rem;">Tehlike Sınıfı</label>
                         <select class="form-select mb-1 border-0 shadow-sm form-select-sm" name="calisma_tehlike_sinifi">
                             <option value="">Seçiniz...</option>
@@ -1126,254 +1137,229 @@ PLAN_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                     </div>
                 </div>
             </div>
-            
             <button class="btn btn-primary rounded-pill px-4 py-2 mt-2" style="font-size:0.85rem;">Güncelle</button>
             <a href="/planlar" class="btn btn-light rounded-pill px-4 py-2 mt-2 ms-2" style="font-size:0.85rem;">İptal</a>
         </form>
     </div>
 """)
 
-# ---------------- YARDIMCI FONKSİYONLAR ----------------
-def resim_kaydet(resim_dosyasi):
-    if resim_dosyasi and resim_dosyasi.filename != '':
-        filename = secure_filename(resim_dosyasi.filename)
-        benzersiz_isim = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
-        resim_dosyasi.save(os.path.join(app.config['UPLOAD_FOLDER'], benzersiz_isim))
-        return benzersiz_isim
-    return None
-
-def resim_sil(resim_adi):
-    if resim_adi:
-        dosya_yolu = os.path.join(app.config['UPLOAD_FOLDER'], resim_adi)
-        if os.path.exists(dosya_yolu):
-            os.remove(dosya_yolu)
-
-def get_firmalar():
-    firmalar_egitim = db.session.query(Egitim.firma_adi).distinct().all()
-    firmalar_kaza = db.session.query(IsKazasi.firma_adi).distinct().all()
-    firmalar_plan = db.session.query(RiskPlan.firma_adi).distinct().all()
-    tum_firmalar = set([f[0] for f in firmalar_egitim if f[0]] + [f[0] for f in firmalar_kaza if f[0]] + [f[0] for f in firmalar_plan if f[0]])
-    return sorted(list(tum_firmalar))
-
-def get_personeller():
-    personeller = db.session.query(Egitim.personel_adi).distinct().all()
-    kaza_personeller = db.session.query(IsKazasi.personel_adi).distinct().all()
-    tum_personeller = set([p[0] for p in personeller if p[0]] + [p[0] for p in kaza_personeller if p[0]])
-    return sorted(list(tum_personeller))
-
-def hesapla_gecerlilik(tarih, tehlike_sinifi):
-    if not tarih or not tehlike_sinifi:
-        return None
-    if tehlike_sinifi == "Az Tehlikeli":
-        return tarih + relativedelta(years=6)
-    elif tehlike_sinifi == "Tehlikeli":
-        return tarih + relativedelta(years=4)
-    elif tehlike_sinifi == "Çok Tehlikeli":
-        return tarih + relativedelta(years=2)
-    return None
+# ---------------- TÜM FİRMALAR ÖZET ----------------
+TUM_FIRMALAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
+    <h3 class="mb-4 fw-bold" style="font-size: 1.2rem;">📊 Tüm Firmalar Özet Paneli</h3>
+    <div class="widget-card p-0 overflow-hidden mb-4" style="border-left:none;">
+        <div class="table-responsive">
+            <table class="table table-custom align-middle mb-0">
+                <thead style="background:#f8f9fa;">
+                    <tr>
+                        <th class="ps-3" style="font-size:0.8rem;">Firma Adı</th>
+                        <th class="text-center" style="font-size:0.8rem;">Personel Sayısı</th>
+                        <th class="text-center" style="font-size:0.8rem;">Eğitim</th>
+                        <th class="text-center" style="font-size:0.8rem;">Süresi Geçen</th>
+                        <th class="text-center" style="font-size:0.8rem;">Yaklaşan (30 Gün)</th>
+                        <th class="text-center" style="font-size:0.8rem;">Kaza</th>
+                        <th class="text-center" style="font-size:0.8rem;">Risk Planı</th>
+                        <th class="text-center pe-3" style="font-size:0.8rem;">İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in firma_ozetleri %}
+                    <tr>
+                        <td class="ps-3"><strong>{{ f.firma }}</strong></td>
+                        <td class="text-center"><span class="badge bg-primary">{{ f.personel_sayisi }}</span></td>
+                        <td class="text-center">{{ f.egitim_sayisi }}</td>
+                        <td class="text-center">
+                            {% if f.suresi_gecen > 0 %}<span class="badge bg-danger">{{ f.suresi_gecen }}</span>
+                            {% else %}<span class="badge bg-success">0</span>{% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if f.yaklasan > 0 %}<span class="badge bg-warning text-dark">{{ f.yaklasan }}</span>
+                            {% else %}<span class="badge bg-light text-dark">0</span>{% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if f.kaza_sayisi > 0 %}<span class="badge bg-danger">{{ f.kaza_sayisi }}</span>
+                            {% else %}<span class="badge bg-light text-dark">0</span>{% endif %}
+                        </td>
+                        <td class="text-center">
+                            {% if f.plan_var %}<span class="badge bg-success">✓</span>
+                            {% else %}<span class="badge bg-light text-dark">-</span>{% endif %}
+                        </td>
+                        <td class="text-center pe-3">
+                            <a href="/firma_sec/{{ f.firma }}" class="btn btn-sm btn-primary rounded-pill px-3">Firmaya Git →</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+""")
 
 # ---------------- ROTALAR ----------------
 @app.route('/')
 def dashboard():
     bugun = date.today()
-    
-    tum_egitimler = Egitim.query.all()
-    yaklasan_egitimler = []
-    suresi_gecenler = []
-    
+    tum_egitimler = firma_filtre(Egitim.query).all()
+    yaklasan_egitimler, suresi_gecenler = [], []
     for e in tum_egitimler:
         kalan = (e.son_gecerlilik - bugun).days
         if kalan < 0: suresi_gecenler.append(e)
         elif kalan <= 30: yaklasan_egitimler.append(e)
-            
     yaklasan_egitimler.sort(key=lambda x: x.personel_adi)
     suresi_gecenler.sort(key=lambda x: x.personel_adi)
-    risk_planlari = RiskPlan.query.all()
-    
-    # UYARILAR (30 Gün yaklaşan veya süresi geçmiş planlar)
+    risk_planlari = firma_filtre(RiskPlan.query).all()
     uyarilar = []
     for plan in risk_planlari:
-        if plan.rd_gecerlilik:
-            kalan_rd = (plan.rd_gecerlilik - bugun).days
-            if kalan_rd < 0:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': 'Risk Değerlendirmesi süresi doldu! Güncellenmeli.', 'durum': 'Süresi Geçmiş'})
-            elif kalan_rd <= 30:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': f'Risk Değerlendirmesi süresi {kalan_rd} gün içinde doluyor.', 'durum': 'Yaklaşıyor'})
-                
-        if plan.adp_gecerlilik:
-            kalan_adp = (plan.adp_gecerlilik - bugun).days
-            if kalan_adp < 0:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': 'Acil Durum Planı süresi doldu! Güncellenmeli.', 'durum': 'Süresi Geçmiş'})
-            elif kalan_adp <= 30:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': f'Acil Durum Planı süresi {kalan_adp} gün içinde doluyor.', 'durum': 'Yaklaşıyor'})
-        
-        if plan.egitim_plani_gecerlilik:
-            kalan_egt = (plan.egitim_plani_gecerlilik - bugun).days
-            if kalan_egt < 0:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': 'Eğitim Planı süresi doldu! Güncellenmeli.', 'durum': 'Süresi Geçmiş'})
-            elif kalan_egt <= 30:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': f'Eğitim Planı süresi {kalan_egt} gün içinde doluyor.', 'durum': 'Yaklaşıyor'})
-                
-        if plan.calisma_plani_gecerlilik:
-            kalan_cls = (plan.calisma_plani_gecerlilik - bugun).days
-            if kalan_cls < 0:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': 'Çalışma Planı süresi doldu! Güncellenmeli.', 'durum': 'Süresi Geçmiş'})
-            elif kalan_cls <= 30:
-                uyarilar.append({'firma': plan.firma_adi, 'mesaj': f'Çalışma Planı süresi {kalan_cls} gün içinde doluyor.', 'durum': 'Yaklaşıyor'})
-
-    # İş Kazası Sonrası RD Güncelleme Uyarısı
-    son_kazalar = [k for k in IsKazasi.query.all() if (bugun - k.tarih).days <= 30 and (bugun - k.tarih).days >= 0]
+        for field, label in [(plan.rd_gecerlilik, 'Risk Değerlendirmesi'), (plan.adp_gecerlilik, 'Acil Durum Planı'), (plan.egitim_plani_gecerlilik, 'Eğitim Planı'), (plan.calisma_plani_gecerlilik, 'Çalışma Planı')]:
+            if field:
+                kalan = (field - bugun).days
+                if kalan < 0:
+                    uyarilar.append({'firma': plan.firma_adi, 'mesaj': f'{label} süresi doldu! Güncellenmeli.', 'durum': 'Süresi Geçmiş'})
+                elif kalan <= 30:
+                    uyarilar.append({'firma': plan.firma_adi, 'mesaj': f'{label} süresi {kalan} gün içinde doluyor.', 'durum': 'Yaklaşıyor'})
+    kaza_q = firma_filtre(IsKazasi.query).all()
+    son_kazalar = [k for k in kaza_q if 0 <= (bugun - k.tarih).days <= 30]
     for k in son_kazalar:
-        uyarilar.append({'firma': k.firma_adi, 'mesaj': f'{k.personel_adi} için son 30 günde iş kazası kaydı var. Risk Değerlendirmesi gözden geçirilmeli!', 'durum': 'Acil Aksiyon'})
+        uyarilar.append({'firma': k.firma_adi, 'mesaj': f'{k.personel_adi} için son 30 günde iş kazası var. RD gözden geçirilmeli!', 'durum': 'Acil Aksiyon'})
+    return render_template_string(DASHBOARD_HTML, yaklasan_egitimler=yaklasan_egitimler, suresi_gecenler=suresi_gecenler, risk_planlari=risk_planlari, bugun=bugun, uyarilar=uyarilar, firmalar=FIRMALAR)
 
-    return render_template_string(DASHBOARD_HTML, 
-        yaklasan_egitimler=yaklasan_egitimler, 
-        suresi_gecenler=suresi_gecenler, 
-        risk_planlari=risk_planlari, 
-        bugun=bugun,
-        uyarilar=uyarilar)
+@app.route('/tum_firmalar')
+def tum_firmalar():
+    bugun = date.today()
+    firma_ozetleri = []
+    for f in FIRMALAR:
+        egitimler = Egitim.query.filter_by(firma_adi=f).all()
+        kazalar = IsKazasi.query.filter_by(firma_adi=f).all()
+        planlar = RiskPlan.query.filter_by(firma_adi=f).all()
+        personeller = set([e.personel_adi for e in egitimler] + [k.personel_adi for k in kazalar])
+        suresi_gecen = sum(1 for e in egitimler if e.durum == 'SÜRESİ GEÇMİŞ')
+        yaklasan = sum(1 for e in egitimler if e.durum == 'YAKLAŞIYOR')
+        firma_ozetleri.append({
+            'firma': f,
+            'personel_sayisi': len(personeller),
+            'egitim_sayisi': len(egitimler),
+            'suresi_gecen': suresi_gecen,
+            'yaklasan': yaklasan,
+            'kaza_sayisi': len(kazalar),
+            'plan_var': len(planlar) > 0
+        })
+    return render_template_string(TUM_FIRMALAR_HTML, firma_ozetleri=firma_ozetleri, firmalar=FIRMALAR)
 
 @app.route('/planlar')
 def plan_listesi():
-    planlar = RiskPlan.query.all()
-    return render_template_string(PLANLAR_HTML, planlar=planlar, bugun=date.today())
+    planlar = firma_filtre(RiskPlan.query).all()
+    return render_template_string(PLANLAR_HTML, planlar=planlar, bugun=date.today(), firmalar=FIRMALAR)
 
 @app.route('/plan/ekle', methods=['GET', 'POST'])
 def plan_ekle():
     if request.method == 'POST':
-        rd_str = request.form.get('rd_tarihi')
-        rd_sinif = request.form.get('rd_tehlike_sinifi')
+        firma = aktif_firma()
+        if firma == 'TÜM FİRMALAR':
+            return "Süper admin modundasınız. Lütfen önce belirli bir firma seçin.", 400
+        rd_str = request.form.get('rd_tarihi'); rd_sinif = request.form.get('rd_tehlike_sinifi')
         rd_tarihi = datetime.strptime(rd_str, '%Y-%m-%d').date() if rd_str else None
         rd_gecerlilik = hesapla_gecerlilik(rd_tarihi, rd_sinif)
-        
-        adp_str = request.form.get('adp_tarihi')
-        adp_sinif = request.form.get('adp_tehlike_sinifi')
+        adp_str = request.form.get('adp_tarihi'); adp_sinif = request.form.get('adp_tehlike_sinifi')
         adp_tarihi = datetime.strptime(adp_str, '%Y-%m-%d').date() if adp_str else None
         adp_gecerlilik = hesapla_gecerlilik(adp_tarihi, adp_sinif)
-
-        egitim_plan_str = request.form.get('egitim_plani_tarihi')
-        egitim_sinif = request.form.get('egitim_tehlike_sinifi')
-        egitim_plan_tarihi = datetime.strptime(egitim_plan_str, '%Y-%m-%d').date() if egitim_plan_str else None
-        egitim_plan_gecerlilik = hesapla_gecerlilik(egitim_plan_tarihi, egitim_sinif)
-
-        calisma_plan_str = request.form.get('calisma_plani_tarihi')
-        calisma_sinif = request.form.get('calisma_tehlike_sinifi')
-        calisma_plan_tarihi = datetime.strptime(calisma_plan_str, '%Y-%m-%d').date() if calisma_plan_str else None
-        calisma_plan_gecerlilik = hesapla_gecerlilik(calisma_plan_tarihi, calisma_sinif)
-        
-        plan = RiskPlan(
-            firma_adi=request.form['firma_adi'],
-            rd_tarihi=rd_tarihi, rd_tehlike_sinifi=rd_sinif, rd_gecerlilik=rd_gecerlilik,
-            adp_tarihi=adp_tarihi, adp_tehlike_sinifi=adp_sinif, adp_gecerlilik=adp_gecerlilik,
-            egitim_plani_tarihi=egitim_plan_tarihi, egitim_tehlike_sinifi=egitim_sinif, egitim_plani_gecerlilik=egitim_plan_gecerlilik,
-            calisma_plani_tarihi=calisma_plan_tarihi, calisma_tehlike_sinifi=calisma_sinif, calisma_plani_gecerlilik=calisma_plan_gecerlilik
-        )
-        db.session.add(plan)
-        db.session.commit()
+        egt_str = request.form.get('egitim_plani_tarihi'); egt_sinif = request.form.get('egitim_tehlike_sinifi')
+        egt_tarihi = datetime.strptime(egt_str, '%Y-%m-%d').date() if egt_str else None
+        egt_gecerlilik = hesapla_gecerlilik(egt_tarihi, egt_sinif)
+        cls_str = request.form.get('calisma_plani_tarihi'); cls_sinif = request.form.get('calisma_tehlike_sinifi')
+        cls_tarihi = datetime.strptime(cls_str, '%Y-%m-%d').date() if cls_str else None
+        cls_gecerlilik = hesapla_gecerlilik(cls_tarihi, cls_sinif)
+        plan = RiskPlan(firma_adi=firma, rd_tarihi=rd_tarihi, rd_tehlike_sinifi=rd_sinif, rd_gecerlilik=rd_gecerlilik, adp_tarihi=adp_tarihi, adp_tehlike_sinifi=adp_sinif, adp_gecerlilik=adp_gecerlilik, egitim_plani_tarihi=egt_tarihi, egitim_tehlike_sinifi=egt_sinif, egitim_plani_gecerlilik=egt_gecerlilik, calisma_plani_tarihi=cls_tarihi, calisma_tehlike_sinifi=cls_sinif, calisma_plani_gecerlilik=cls_gecerlilik)
+        db.session.add(plan); db.session.commit()
         return redirect(url_for('plan_listesi'))
-    return render_template_string(PLAN_EKLE_HTML, firmalar=get_firmalar())
+    return render_template_string(PLAN_EKLE_HTML, firmalar=FIRMALAR)
 
 @app.route('/plan/duzenle/<int:id>', methods=['GET', 'POST'])
 def plan_duzenle(id):
     plan = RiskPlan.query.get_or_404(id)
     if request.method == 'POST':
-        plan.firma_adi = request.form['firma_adi']
-        
         rd_str = request.form.get('rd_tarihi')
         plan.rd_tarihi = datetime.strptime(rd_str, '%Y-%m-%d').date() if rd_str else None
         plan.rd_tehlike_sinifi = request.form.get('rd_tehlike_sinifi')
         plan.rd_gecerlilik = hesapla_gecerlilik(plan.rd_tarihi, plan.rd_tehlike_sinifi)
-        
         adp_str = request.form.get('adp_tarihi')
         plan.adp_tarihi = datetime.strptime(adp_str, '%Y-%m-%d').date() if adp_str else None
         plan.adp_tehlike_sinifi = request.form.get('adp_tehlike_sinifi')
         plan.adp_gecerlilik = hesapla_gecerlilik(plan.adp_tarihi, plan.adp_tehlike_sinifi)
-
-        egitim_plan_str = request.form.get('egitim_plani_tarihi')
-        plan.egitim_plani_tarihi = datetime.strptime(egitim_plan_str, '%Y-%m-%d').date() if egitim_plan_str else None
+        egt_str = request.form.get('egitim_plani_tarihi')
+        plan.egitim_plani_tarihi = datetime.strptime(egt_str, '%Y-%m-%d').date() if egt_str else None
         plan.egitim_tehlike_sinifi = request.form.get('egitim_tehlike_sinifi')
         plan.egitim_plani_gecerlilik = hesapla_gecerlilik(plan.egitim_plani_tarihi, plan.egitim_tehlike_sinifi)
-
-        calisma_plan_str = request.form.get('calisma_plani_tarihi')
-        plan.calisma_plani_tarihi = datetime.strptime(calisma_plan_str, '%Y-%m-%d').date() if calisma_plan_str else None
+        cls_str = request.form.get('calisma_plani_tarihi')
+        plan.calisma_plani_tarihi = datetime.strptime(cls_str, '%Y-%m-%d').date() if cls_str else None
         plan.calisma_tehlike_sinifi = request.form.get('calisma_tehlike_sinifi')
         plan.calisma_plani_gecerlilik = hesapla_gecerlilik(plan.calisma_plani_tarihi, plan.calisma_tehlike_sinifi)
-        
         db.session.commit()
         return redirect(url_for('plan_listesi'))
-    return render_template_string(PLAN_DUZENLE_HTML, plan=plan, firmalar=get_firmalar())
+    return render_template_string(PLAN_DUZENLE_HTML, plan=plan, firmalar=FIRMALAR)
 
 @app.route('/plan/sil/<int:id>')
 def plan_sil(id):
-    plan = RiskPlan.query.get_or_404(id)
-    db.session.delete(plan)
-    db.session.commit()
+    plan = RiskPlan.query.get_or_404(id); db.session.delete(plan); db.session.commit()
     return redirect(url_for('plan_listesi'))
 
 @app.route('/egitimler')
 def egitim_listesi():
-    secili_firma = request.args.get('firma', '')
     siralama = request.args.get('siralama', 'yeni')
-    query = Egitim.query
-    if secili_firma: query = query.filter_by(firma_adi=secili_firma)
+    query = firma_filtre(Egitim.query)
     if siralama == 'eski': egitimler = query.order_by(Egitim.egitim_tarihi.asc()).all()
     else: egitimler = query.order_by(Egitim.egitim_tarihi.desc()).all()
-        
-    kazalar = IsKazasi.query.all()
+    kazalar = firma_filtre(IsKazasi.query).all()
     kazalar_dict = {}
     for k in kazalar: 
-        p_adi_kucuk = k.personel_adi.lower().strip()
-        kazalar_dict[p_adi_kucuk] = kazalar_dict.get(p_adi_kucuk, 0) + 1
-        
-    return render_template_string(EGITIMLER_HTML, egitimler=egitimler, siralama=siralama, secili_firma=secili_firma, firmalar=get_firmalar(), kazalar_dict=kazalar_dict)
+        p = k.personel_adi.lower().strip()
+        kazalar_dict[p] = kazalar_dict.get(p, 0) + 1
+    return render_template_string(EGITIMLER_HTML, egitimler=egitimler, siralama=siralama, kazalar_dict=kazalar_dict, firmalar=FIRMALAR)
 
 @app.route('/personel_detay/<path:personel_adi>')
 def personel_detay(personel_adi):
-    p_adi_kucuk = personel_adi.lower().strip()
-    tum_egitimler = Egitim.query.all()
-    egitimler = [e for e in tum_egitimler if e.personel_adi.lower().strip() == p_adi_kucuk]
+    p = personel_adi.lower().strip()
+    firma = aktif_firma()
+    q_e = Egitim.query; q_k = IsKazasi.query
+    if firma != 'TÜM FİRMALAR':
+        q_e = q_e.filter(Egitim.firma_adi == firma); q_k = q_k.filter(IsKazasi.firma_adi == firma)
+    egitimler = [e for e in q_e.all() if e.personel_adi.lower().strip() == p]
     egitimler.sort(key=lambda x: x.egitim_tarihi, reverse=True)
-    
-    tum_kazalar = IsKazasi.query.all()
-    kazalar = [k for k in tum_kazalar if k.personel_adi.lower().strip() == p_adi_kucuk]
+    kazalar = [k for k in q_k.all() if k.personel_adi.lower().strip() == p]
     kazalar.sort(key=lambda x: x.tarih, reverse=True)
-    
     personel_bilgi = egitimler[0] if egitimler else (kazalar[0] if kazalar else None)
-    return render_template_string(PERSONEL_DETAY_HTML, personel_adi=personel_adi, personel_bilgi=personel_bilgi, egitimler=egitimler, kazalar=kazalar)
+    return render_template_string(PERSONEL_DETAY_HTML, personel_adi=personel_adi, personel_bilgi=personel_bilgi, egitimler=egitimler, kazalar=kazalar, firmalar=FIRMALAR)
 
 @app.route('/egitimler/excel')
 def egitim_excel():
-    secili_firma = request.args.get('firma', '')
     siralama = request.args.get('siralama', 'yeni')
-    query = Egitim.query
-    if secili_firma: query = query.filter_by(firma_adi=secili_firma)
+    query = firma_filtre(Egitim.query)
     if siralama == 'eski': egitimler = query.order_by(Egitim.egitim_tarihi.asc()).all()
     else: egitimler = query.order_by(Egitim.egitim_tarihi.desc()).all()
-
     wb = Workbook(); ws = wb.active; ws.title = "Eğitim Listesi"
     headers = ["Sıra No", "Firma Adı", "Personel", "Görevi", "İşe Giriş", "Eğitim Adı", "Eğitim Tarihi", "Geçerlilik (Ay)", "Son Geçerlilik", "Durum"]
     ws.append(headers)
     for index, e in enumerate(egitimler, start=1):
         ws.append([index, e.firma_adi, e.personel_adi, e.gorevi or '-', e.ise_giris.strftime('%d.%m.%Y') if e.ise_giris else '-', e.egitim_adi, e.egitim_tarihi.strftime('%d.%m.%Y'), e.gecerlilik_ay, e.son_gecerlilik.strftime('%d.%m.%Y'), e.durum])
     output = io.BytesIO(); wb.save(output); output.seek(0)
-    dosya_adi = f"{secili_firma}_Egitim_Listesi.xlsx" if secili_firma else "Tum_Firmalar_Egitim_Listesi.xlsx"
-    return send_file(output, download_name=dosya_adi, as_attachment=True)
+    return send_file(output, download_name=f"{aktif_firma()}_Egitim_Listesi.xlsx".replace(" ", "_"), as_attachment=True)
 
 @app.route('/egitim/ekle', methods=['GET', 'POST'])
 def egitim_ekle():
+    firma = aktif_firma()
     if request.method == 'POST':
+        if firma == 'TÜM FİRMALAR': return "Süper admin modundasınız. Lütfen önce belirli bir firma seçin.", 400
         resim_dosyasi = request.files.get('resim'); resim_adi = resim_kaydet(resim_dosyasi)
         ise_giris_str = request.form.get('ise_giris'); ise_giris = datetime.strptime(ise_giris_str, '%Y-%m-%d').date() if ise_giris_str else None
-        e = Egitim(firma_adi=request.form['firma_adi'], personel_adi=request.form['personel_adi'], gorevi=request.form.get('gorevi', ''), ise_giris=ise_giris, resim=resim_adi, egitim_adi=request.form['egitim_adi'], egitim_tarihi=datetime.strptime(request.form['egitim_tarihi'], '%Y-%m-%d').date(), gecerlilik_ay=int(request.form['gecerlilik_ay']), sertifika_no=request.form.get('sertifika_no', ''))
+        e = Egitim(firma_adi=firma, personel_adi=request.form['personel_adi'], gorevi=request.form.get('gorevi', ''), ise_giris=ise_giris, resim=resim_adi, egitim_adi=request.form['egitim_adi'], egitim_tarihi=datetime.strptime(request.form['egitim_tarihi'], '%Y-%m-%d').date(), gecerlilik_ay=int(request.form['gecerlilik_ay']), sertifika_no=request.form.get('sertifika_no', ''))
         db.session.add(e); db.session.commit()
         return redirect(url_for('egitim_listesi'))
-    return render_template_string(EGITIM_EKLE_HTML, firmalar=get_firmalar(), personeller=get_personeller())
+    return render_template_string(EGITIM_EKLE_HTML, personeller=get_personeller(firma), firmalar=FIRMALAR)
 
 @app.route('/egitim/duzenle/<int:id>', methods=['GET', 'POST'])
 def egitim_duzenle(id):
     e = Egitim.query.get_or_404(id)
+    firma = aktif_firma()
     if request.method == 'POST':
-        e.firma_adi = request.form['firma_adi']; e.personel_adi = request.form['personel_adi']; e.gorevi = request.form.get('gorevi', ''); e.egitim_adi = request.form['egitim_adi']
+        e.personel_adi = request.form['personel_adi']; e.gorevi = request.form.get('gorevi', ''); e.egitim_adi = request.form['egitim_adi']
         e.egitim_tarihi = datetime.strptime(request.form['egitim_tarihi'], '%Y-%m-%d').date(); e.gecerlilik_ay = int(request.form['gecerlilik_ay']); e.sertifika_no = request.form.get('sertifika_no', '')
         ise_giris_str = request.form.get('ise_giris'); e.ise_giris = datetime.strptime(ise_giris_str, '%Y-%m-%d').date() if ise_giris_str else None
         if request.form.get('resim_sil') == 'on': resim_sil(e.resim); e.resim = None
@@ -1382,7 +1368,7 @@ def egitim_duzenle(id):
             resim_sil(e.resim); e.resim = resim_kaydet(yeni_resim)
         db.session.commit()
         return redirect(url_for('egitim_listesi'))
-    return render_template_string(EGITIM_DUZENLE_HTML, e=e, firmalar=get_firmalar(), personeller=get_personeller())
+    return render_template_string(EGITIM_DUZENLE_HTML, e=e, personeller=get_personeller(firma), firmalar=FIRMALAR)
 
 @app.route('/egitim/sil/<int:id>')
 def egitim_sil(id):
@@ -1391,61 +1377,42 @@ def egitim_sil(id):
 
 @app.route('/kazalar')
 def kaza_listesi():
-    secili_firma = request.args.get('firma', '')
     siralama = request.args.get('siralama', 'yeni')
-    
-    query = IsKazasi.query
-    if secili_firma: query = query.filter_by(firma_adi=secili_firma)
+    query = firma_filtre(IsKazasi.query)
     if siralama == 'eski': kazalar = query.order_by(IsKazasi.tarih.asc()).all()
     else: kazalar = query.order_by(IsKazasi.tarih.desc()).all()
-        
-    return render_template_string(KAZALAR_HTML, kazalar=kazalar, siralama=siralama, secili_firma=secili_firma, firmalar=get_firmalar())
+    return render_template_string(KAZALAR_HTML, kazalar=kazalar, siralama=siralama, firmalar=FIRMALAR)
 
 @app.route('/kazalar/excel')
 def kaza_excel():
-    secili_firma = request.args.get('firma', '')
     siralama = request.args.get('siralama', 'yeni')
-    
-    query = IsKazasi.query
-    if secili_firma: query = query.filter_by(firma_adi=secili_firma)
+    query = firma_filtre(IsKazasi.query)
     if siralama == 'eski': kazalar = query.order_by(IsKazasi.tarih.asc()).all()
     else: kazalar = query.order_by(IsKazasi.tarih.desc()).all()
-        
     wb = Workbook(); ws = wb.active; ws.title = "Kaza Listesi"
     headers = ["Sıra No", "Firma", "Personel", "Kaza Tarihi", "Yaralanma Türü", "Kaza Yeri", "SGK Bildirim Tarihi", "Rapor Gün Sayısı", "Kaza Sonrası Eğitim", "Kök Neden", "Düzeltici Faaliyet"]
     ws.append(headers)
     for index, k in enumerate(kazalar, start=1):
-        ws.append([
-            index, k.firma_adi, k.personel_adi, k.tarih.strftime('%d.%m.%Y'), k.yaralanma_turu, k.yer,
-            k.sgk_bildirim_tarihi.strftime('%d.%m.%Y') if k.sgk_bildirim_tarihi else '-', k.rapor_gun_sayisi or '-',
-            k.kaza_sonrasi_egitim.strftime('%d.%m.%Y') if k.kaza_sonrasi_egitim else '-',
-            k.kok_neden or '-', k.duzeltici_faaliyet or '-'
-        ])
+        ws.append([index, k.firma_adi, k.personel_adi, k.tarih.strftime('%d.%m.%Y'), k.yaralanma_turu, k.yer, k.sgk_bildirim_tarihi.strftime('%d.%m.%Y') if k.sgk_bildirim_tarihi else '-', k.rapor_gun_sayisi or '-', k.kaza_sonrasi_egitim.strftime('%d.%m.%Y') if k.kaza_sonrasi_egitim else '-', k.kok_neden or '-', k.duzeltici_faaliyet or '-'])
     output = io.BytesIO(); wb.save(output); output.seek(0)
-    dosya_adi = f"{secili_firma}_Kaza_Listesi.xlsx" if secili_firma else "Tum_Firmalar_Kaza_Listesi.xlsx"
-    return send_file(output, download_name=dosya_adi, as_attachment=True)
+    return send_file(output, download_name=f"{aktif_firma()}_Kaza_Listesi.xlsx".replace(" ", "_"), as_attachment=True)
 
 @app.route('/kaza/ekle', methods=['GET', 'POST'])
 def kaza_ekle():
+    firma = aktif_firma()
     if request.method == 'POST':
+        if firma == 'TÜM FİRMALAR': return "Süper admin modundasınız. Lütfen önce belirli bir firma seçin.", 400
         sgk_str = request.form.get('sgk_bildirim_tarihi'); rapor_str = request.form.get('rapor_gun_sayisi'); sonraki_egitim_str = request.form.get('kaza_sonrasi_egitim')
-        k = IsKazasi(
-            firma_adi=request.form['firma_adi'], personel_adi=request.form['personel_adi'], tarih=datetime.strptime(request.form['tarih'], '%Y-%m-%d').date(),
-            yer=request.form['yer'], aciklama=request.form['aciklama'], yaralanma_turu=request.form['yaralanma_turu'],
-            kok_neden=request.form.get('kok_neden', ''), duzeltici_faaliyet=request.form.get('duzeltici_faaliyet', ''),
-            sgk_bildirim_tarihi=datetime.strptime(sgk_str, '%Y-%m-%d').date() if sgk_str else None,
-            rapor_gun_sayisi=int(rapor_str) if rapor_str else None,
-            kaza_sonrasi_egitim=datetime.strptime(sonraki_egitim_str, '%Y-%m-%d').date() if sonraki_egitim_str else None
-        )
+        k = IsKazasi(firma_adi=firma, personel_adi=request.form['personel_adi'], tarih=datetime.strptime(request.form['tarih'], '%Y-%m-%d').date(), yer=request.form['yer'], aciklama=request.form['aciklama'], yaralanma_turu=request.form['yaralanma_turu'], kok_neden=request.form.get('kok_neden', ''), duzeltici_faaliyet=request.form.get('duzeltici_faaliyet', ''), sgk_bildirim_tarihi=datetime.strptime(sgk_str, '%Y-%m-%d').date() if sgk_str else None, rapor_gun_sayisi=int(rapor_str) if rapor_str else None, kaza_sonrasi_egitim=datetime.strptime(sonraki_egitim_str, '%Y-%m-%d').date() if sonraki_egitim_str else None)
         db.session.add(k); db.session.commit()
         return redirect(url_for('kaza_listesi'))
-    return render_template_string(KAZA_EKLE_HTML, firmalar=get_firmalar(), personeller=get_personeller())
+    return render_template_string(KAZA_EKLE_HTML, personeller=get_personeller(firma), firmalar=FIRMALAR)
 
 @app.route('/kaza/duzenle/<int:id>', methods=['GET', 'POST'])
 def kaza_duzenle(id):
     k = IsKazasi.query.get_or_404(id)
     if request.method == 'POST':
-        k.firma_adi = request.form['firma_adi']; k.personel_adi = request.form['personel_adi']; k.tarih = datetime.strptime(request.form['tarih'], '%Y-%m-%d').date()
+        k.personel_adi = request.form['personel_adi']; k.tarih = datetime.strptime(request.form['tarih'], '%Y-%m-%d').date()
         k.yer = request.form['yer']; k.aciklama = request.form['aciklama']; k.yaralanma_turu = request.form['yaralanma_turu']
         k.kok_neden = request.form.get('kok_neden', ''); k.duzeltici_faaliyet = request.form.get('duzeltici_faaliyet', '')
         sgk_str = request.form.get('sgk_bildirim_tarihi'); rapor_str = request.form.get('rapor_gun_sayisi'); sonraki_egitim_str = request.form.get('kaza_sonrasi_egitim')
@@ -1454,14 +1421,13 @@ def kaza_duzenle(id):
         k.kaza_sonrasi_egitim = datetime.strptime(sonraki_egitim_str, '%Y-%m-%d').date() if sonraki_egitim_str else None
         db.session.commit()
         return redirect(url_for('kaza_listesi'))
-    return render_template_string(KAZA_DUZENLE_HTML, k=k, firmalar=get_firmalar(), personeller=get_personeller())
+    return render_template_string(KAZA_DUZENLE_HTML, k=k, personeller=get_personeller(aktif_firma()), firmalar=FIRMALAR)
 
 @app.route('/kaza/sil/<int:id>')
 def kaza_sil(id):
     k = IsKazasi.query.get_or_404(id); db.session.delete(k); db.session.commit()
     return redirect(url_for('kaza_listesi'))
 
-# Veritabanı tablolarını uygulama başlarken otomatik oluştur
 with app.app_context():
     db.create_all()
 
