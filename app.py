@@ -1428,8 +1428,16 @@ def kaza_sil(id):
     k = IsKazasi.query.get_or_404(id); db.session.delete(k); db.session.commit()
     return redirect(url_for('kaza_listesi'))
 
+# Veritabanı tablolarını uygulama başlarken oluştur (PostgreSQL için)
 with app.app_context():
-    db.create_all()
+    try:
+        db.create_all()
+        print("✅ Veritabanı tabloları başarıyla oluşturuldu veya zaten mevcut.")
+    except Exception as e:
+        print(f"❌ Tablo oluşturma hatası: {e}")
+
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
