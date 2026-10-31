@@ -3,3 +3,4 @@ Flask-SQLAlchemy
 python-dateutil
 openpyxl
 gunicorn
+psycopg2-binary
