@@ -24,7 +24,7 @@ FIRMALAR = [
     "Tezmak",
 ]
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:1071isgtakip@db.vykhokdrahdftzwlizdu.supabase.co:5432/postgres'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres.vykhokdrahdftzwlizdu:1071isgkatip@aws-0-eu-west-1.pooler.supabase.com:5432/postgres'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 UPLOAD_FOLDER = os.path.join('static', 'uploads')
@@ -1435,9 +1435,6 @@ with app.app_context():
         print("✅ Veritabanı tabloları başarıyla oluşturuldu veya zaten mevcut.")
     except Exception as e:
         print(f"❌ Tablo oluşturma hatası: {e}")
-
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
