@@ -24,7 +24,7 @@ FIRMALAR = [
     "Tezmak",
 ]
 
-app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:w9mQt-qTSSdD2%23y@db.vykhokdrahdftzwlizdu.supabase.co:5432/postgres'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres:w9mQt-qTSSdD2%23y@db.vykhokdrahdftzwlizdu.supabase.co:5432/postgres'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 UPLOAD_FOLDER = os.path.join('static', 'uploads')
