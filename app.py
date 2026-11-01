@@ -351,7 +351,7 @@ def firma_degistir():
 
 @app.before_request
 def giris_kontrol():
-    izinli = ['giris', 'static', 'firma_secim_sayfasi', 'firma_sec', 'firma_degistir']
+    izinli = ['giris', 'static', 'firma_secim_sayfasi', 'firma_sec', 'firma_degistir', 'sertifika_dogrula']
     if request.endpoint in izinli:
         return None
     if not session.get('giris_yapildi'):
