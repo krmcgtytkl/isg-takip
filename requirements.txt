@@ -4,3 +4,4 @@ python-dateutil
 openpyxl
 gunicorn
 psycopg2-binary
+qrcode[pil]
