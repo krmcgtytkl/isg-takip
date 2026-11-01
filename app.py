@@ -6,6 +6,8 @@ from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 from openpyxl import Workbook
 from werkzeug.utils import secure_filename
+import base64
+import qrcode
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'isg-gizli-anahtar'
@@ -15,15 +17,15 @@ KULLANICI_ADI = 'admin'
 SITE_SIFRESI = '1071isg'
 app.config['PERMANENT_SESSION_LIFETIME'] = 86400
 
-# ---------------- FİRMA LİSTESİ ----------------
-# Kendi firmalarınızı buraya ekleyin. İstediğiniz kadar ekleyebilirsiniz.
-FIRMALAR = [
+# ---------------- VARSAYILAN FİRMA LİSTESİ ----------------
+VARSAYILAN_FIRMALAR = [
     "Tat Nişasta.",
     "Sitrik Asit.",
     "Etanol",
     "Tezmak",
 ]
 
+# ---------------- VERİTABANI BAĞLANTISI ----------------
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql+psycopg2://postgres.vykhokdrahdftzwlizdu:1071isgkatip@aws-0-eu-west-1.pooler.supabase.com:5432/postgres'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -87,6 +89,27 @@ class RiskPlan(db.Model):
     calisma_plani_tarihi = db.Column(db.Date, nullable=True)
     calisma_plani_gecerlilik = db.Column(db.Date, nullable=True)
 
+class Firma(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    adi = db.Column(db.String(150), nullable=False, unique=True)
+    aktif = db.Column(db.Boolean, default=True)
+    olusturma = db.Column(db.Date, default=date.today)
+
+# ---------------- FİRMA LİSTESİ HELPER ----------------
+def get_firmalar_listesi():
+    try:
+        firmalar = Firma.query.filter_by(aktif=True).order_by(Firma.adi).all()
+        if not firmalar:
+            for f_adi in VARSAYILAN_FIRMALAR:
+                if not Firma.query.filter_by(adi=f_adi).first():
+                    db.session.add(Firma(adi=f_adi))
+            db.session.commit()
+            firmalar = Firma.query.filter_by(aktif=True).order_by(Firma.adi).all()
+        return [f.adi for f in firmalar]
+    except Exception as e:
+        print(f"⚠️ Firma listesi hatası: {e}")
+        return list(VARSAYILAN_FIRMALAR)
+
 # ---------------- HTML ŞABLONU (ORTAK) ----------------
 BASE_HTML = """
 <!DOCTYPE html>
@@ -96,6 +119,7 @@ BASE_HTML = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>İSG TAKİP</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.5/font/bootstrap-icons.css">
     <style>
@@ -109,41 +133,10 @@ BASE_HTML = """
         .sidebar-bottom { padding-bottom: 20px; }
         .main-content { margin-left: 250px; padding: 30px; min-height: 100vh; background: #f4f7f6; }
         
-        /* FİRMA SEÇİCİ BANT */
-        .firma-selector {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            border-radius: 15px;
-            padding: 20px 25px;
-            margin-bottom: 25px;
-            color: white;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-        .firma-selector .label {
-            font-size: 0.85rem;
-            opacity: 0.9;
-            margin-bottom: 5px;
-            display: block;
-        }
-        .firma-selector select {
-            border-radius: 10px;
-            border: none;
-            padding: 10px 15px;
-            font-size: 1rem;
-            font-weight: 600;
-            min-width: 300px;
-            background: white;
-            color: #2c3e50;
-        }
-        .firma-selector .info {
-            font-size: 0.85rem;
-            opacity: 0.9;
-        }
-        .firma-selector .info strong { color: #fff; font-size: 1.1rem; }
+        .firma-selector { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 15px; padding: 20px 25px; margin-bottom: 25px; color: white; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3); flex-wrap: wrap; gap: 15px; }
+        .firma-selector .label { font-size: 0.85rem; opacity: 0.9; margin-bottom: 5px; display: block; }
+        .firma-selector select { border-radius: 10px; border: none; padding: 10px 15px; font-size: 1rem; font-weight: 600; min-width: 300px; background: white; color: #2c3e50; }
+        .firma-selector .info { font-size: 0.85rem; opacity: 0.9; }
         
         .widget-card { background: white; border-radius: 15px; padding: 20px; box-shadow: 0 4px 15px rgba(0,0,0,0.03); transition: transform 0.3s; height: 100%; border-left: 5px solid transparent; }
         .widget-card:hover { transform: translateY(-3px); box-shadow: 0 8px 25px rgba(0,0,0,0.08); }
@@ -170,8 +163,6 @@ BASE_HTML = """
         .alert-panel-title { font-weight: 700; font-size: 1rem; color: #856404; margin-bottom: 10px; display: flex; align-items: center; gap: 10px; }
         .alert-item { font-size: 0.85rem; padding: 6px 0; border-bottom: 1px dashed rgba(0,0,0,0.1); display: flex; justify-content: space-between; }
         .alert-item:last-child { border-bottom: none; }
-        .top-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
-        .top-bar h3 { font-weight: 600; margin: 0; font-size: 1.3rem; }
         @media (max-width: 768px) {
             .sidebar { width: 100%; height: auto; position: relative; border-radius: 0; }
             .main-content { margin-left: 0; padding: 15px; }
@@ -186,7 +177,9 @@ BASE_HTML = """
         <div class="sidebar-menu">
             <a href="/" class="active"><i class="bi bi-grid-1x2-fill"></i> Panel</a>
             <a href="/firma_degistir"><i class="bi bi-arrow-left-right"></i> Firma Değiştir</a>
+            <a href="/firma_yonetim"><i class="bi bi-gear-fill"></i> Firma Yönetimi</a>
             <a href="/tum_firmalar"><i class="bi bi-buildings"></i> Tüm Firmalar Özet</a>
+            <a href="/personeller"><i class="bi bi-people-fill"></i> Personel Listesi</a>
             <a href="/egitimler"><i class="bi bi-mortarboard-fill"></i> Eğitimler</a>
             <a href="/egitim/ekle"><i class="bi bi-plus-circle-fill"></i> + Eğitim Ekle</a>
             <a href="/kazalar"><i class="bi bi-exclamation-triangle-fill"></i> Kazalar</a>
@@ -261,24 +254,6 @@ GIRIS_HTML = """
 </html>
 """
 
-@app.route('/giris', methods=['GET', 'POST'])
-def giris():
-    if request.method == 'POST':
-        kullanici = request.form.get('kullanıcı_adi', request.form.get('kullanici_adi', '')).strip()
-        sifre = request.form.get('sifre', '')
-        if kullanici == KULLANICI_ADI and sifre == SITE_SIFRESI:
-            session['giris_yapildi'] = True
-            session['kullanici_adi'] = kullanici
-            return redirect(url_for('firma_secim_sayfasi'))
-        else:
-            return render_template_string(GIRIS_HTML, hata="Kullanıcı adı veya şifre hatalı!")
-    return render_template_string(GIRIS_HTML, hata=None)
-
-@app.route('/cikis')
-def cikis():
-    session.clear()
-    return redirect(url_for('giris'))
-
 # ---------------- FİRMA SEÇİM SAYFASI ----------------
 FIRMA_SECIM_HTML = """
 <!DOCTYPE html>
@@ -336,16 +311,37 @@ FIRMA_SECIM_HTML = """
 </html>
 """
 
+# ---------------- ROUTE'LAR VE YARDIMCI FONKSİYONLAR ----------------
+@app.route('/giris', methods=['GET', 'POST'])
+def giris():
+    if request.method == 'POST':
+        kullanici = request.form.get('kullanıcı_adi', request.form.get('kullanici_adi', '')).strip()
+        sifre = request.form.get('sifre', '')
+        if kullanici == KULLANICI_ADI and sifre == SITE_SIFRESI:
+            session['giris_yapildi'] = True
+            session['kullanici_adi'] = kullanici
+            return redirect(url_for('firma_secim_sayfasi'))
+        else:
+            return render_template_string(GIRIS_HTML, hata="Kullanıcı adı veya şifre hatalı!")
+    return render_template_string(GIRIS_HTML, hata=None)
+
+@app.route('/cikis')
+def cikis():
+    session.clear()
+    return redirect(url_for('giris'))
+
 @app.route('/firma_secim')
 def firma_secim_sayfasi():
     if not session.get('giris_yapildi'):
         return redirect(url_for('giris'))
-    return render_template_string(FIRMA_SECIM_HTML, firmalar=FIRMALAR)
+    return render_template_string(FIRMA_SECIM_HTML, firmalar=get_firmalar_listesi())
 
 @app.route('/firma_sec/<path:firma>')
 def firma_sec(firma):
     if not session.get('giris_yapildi'):
         return redirect(url_for('giris'))
+    if firma != 'TÜM FİRMALAR' and firma not in get_firmalar_listesi():
+        return redirect(url_for('firma_secim_sayfasi'))
     session['firma_adi'] = firma
     return redirect(url_for('dashboard'))
 
@@ -353,7 +349,6 @@ def firma_sec(firma):
 def firma_degistir():
     return redirect(url_for('firma_secim_sayfasi'))
 
-# ---------------- GİRİŞ KONTROLÜ ----------------
 @app.before_request
 def giris_kontrol():
     izinli = ['giris', 'static', 'firma_secim_sayfasi', 'firma_sec', 'firma_degistir']
@@ -361,11 +356,9 @@ def giris_kontrol():
         return None
     if not session.get('giris_yapildi'):
         return redirect(url_for('giris'))
-    # Firma seçilmediyse firma seçim sayfasına yönlendir
     if not session.get('firma_adi') and request.endpoint != 'firma_secim_sayfasi':
         return redirect(url_for('firma_secim_sayfasi'))
 
-# ---------------- YARDIMCI FONKSİYONLAR ----------------
 def aktif_firma():
     return session.get('firma_adi', '')
 
@@ -396,9 +389,20 @@ def hesapla_gecerlilik(tarih, tehlike_sinifi):
 
 def resim_kaydet(resim_dosyasi):
     if resim_dosyasi and resim_dosyasi.filename != '':
-        filename = secure_filename(resim_dosyasi.filename)
-        benzersiz_isim = f"{datetime.now().strftime('%Y%m%d%H%M%S')}_{filename}"
-        resim_dosyasi.save(os.path.join(app.config['UPLOAD_FOLDER'], benzersiz_isim))
+        # Dosya uzantısını al (örn: .jpg, .png)
+        uzanti = os.path.splitext(resim_dosyasi.filename)[1].lower()
+        # Benzersiz bir isim oluştur
+        benzersiz_isim = f"{datetime.now().strftime('%Y%m%d%H%M%S%f')}{uzanti}"
+        
+        # Klasörün var olduğundan emin ol (yoksa oluştur)
+        upload_dir = os.path.join(app.root_path, 'static', 'uploads')
+        os.makedirs(upload_dir, exist_ok=True)
+        
+        # Tam kayıt yolu
+        kayit_yolu = os.path.join(upload_dir, benzersiz_isim)
+        
+        # Dosyayı kaydet
+        resim_dosyasi.save(kayit_yolu)
         return benzersiz_isim
     return None
 
@@ -407,7 +411,6 @@ def resim_sil(resim_adi):
         dosya_yolu = os.path.join(app.config['UPLOAD_FOLDER'], resim_adi)
         if os.path.exists(dosya_yolu):
             os.remove(dosya_yolu)
-
 # ---------------- SAYFA İÇERİKLERİ ----------------
 DASHBOARD_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
     {% if uyarilar %}
@@ -657,13 +660,17 @@ EGITIMLER_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
         <h3 class="mb-0 fw-bold" style="font-size: 1.1rem;">Eğitim Listesi</h3>
         <div class="d-flex gap-2 align-items-center flex-nowrap">
             <form method="get" class="d-flex gap-2 align-items-center m-0">
+                <input type="text" name="arama" class="form-control border-0 shadow-sm form-control-sm" placeholder="Personel veya Eğitim Ara..." value="{{ arama or '' }}" style="width: 250px; border-radius: 20px;">
+                <button type="submit" class="btn btn-primary rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-search"></i></button>
+            </form>
+            <form method="get" class="d-flex gap-2 align-items-center m-0">
                 <select name="siralama" class="form-select border-0 shadow-sm" style="width: auto; font-size:0.8rem; padding: 6px 12px; border-radius: 8px;" onchange="this.form.submit()">
                     <option value="yeni" {% if siralama == 'yeni' %}selected{% endif %}>En Yeni</option>
                     <option value="eski" {% if siralama == 'eski' %}selected{% endif %}>En Eski</option>
                 </select>
             </form>
-            <a href="/egitimler/excel?siralama={{ siralama }}" class="btn btn-success text-nowrap rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-file-earmark-excel"></i> Excel</a>
-            <a href="/egitim/ekle" class="btn btn-primary text-nowrap rounded-pill px-3" style="font-size:0.8rem;">+ Eğitim</a>
+            <a href="/egitimler/excel?siralama={{ siralama }}&arama={{ arama or '' }}" class="btn btn-success text-nowrap rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+            <a href="/egitim/ekle" class="btn btn-primary text-nowrap rounded-pill px-3" style="font-size:0.8rem;">+ Eğitim Ekle</a>
         </div>
     </div>
     <div class="widget-card p-0 overflow-hidden" style="border-left:none;">
@@ -671,8 +678,18 @@ EGITIMLER_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
             <table class="table table-custom align-middle table-hover mb-0">
                 <thead style="background:#f8f9fa;">
                     <tr>
-                        <th class="ps-3" style="font-size:0.75rem;">Sıra</th><th style="font-size:0.75rem;">Resim</th><th style="font-size:0.75rem;">Firma</th><th style="font-size:0.75rem;">Personel</th><th style="font-size:0.75rem;">Görevi</th><th style="font-size:0.75rem;">İşe Giriş</th>
-                        <th style="font-size:0.75rem;">Eğitim Adı</th><th style="font-size:0.75rem;">Eğitim Tarihi</th><th style="font-size:0.75rem;">Son Geçerlilik</th><th style="font-size:0.75rem;">Durum</th><th style="font-size:0.75rem;">Kaza</th><th class="pe-3" style="font-size:0.75rem;">İşlem</th>
+                        <th class="ps-3" style="font-size:0.75rem;">Sıra</th>
+                        <th style="font-size:0.75rem;">Resim</th>
+                        <th style="font-size:0.75rem;">Firma</th>
+                        <th style="font-size:0.75rem;">Personel</th>
+                        <th style="font-size:0.75rem;">Görevi</th>
+                        <th style="font-size:0.75rem;">İşe Giriş</th>
+                        <th style="font-size:0.75rem;">Eğitim Adı</th>
+                        <th style="font-size:0.75rem;">Eğitim Tarihi</th>
+                        <th style="font-size:0.75rem;">Son Geçerlilik</th>
+                        <th style="font-size:0.75rem;">Durum</th>
+                        <th style="font-size:0.75rem;">Kaza</th>
+                        <th class="pe-3 text-center" style="font-size:0.75rem;">İşlemler</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -700,11 +717,14 @@ EGITIMLER_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                             {% if kaza_var %}<span class="badge bg-danger badge-glass">⚠️ ({{ kaza_var }})</span>
                             {% else %}<span class="badge bg-light text-dark border badge-glass">Yok</span>{% endif %}
                         </td>
-                        <td class="pe-3" onclick="event.stopPropagation();">
-                            <a href="/egitim/duzenle/{{ e.id }}" class="btn-glass text-decoration-none text-primary"><i class="bi bi-pencil-square"></i></a>
-                            <a href="/egitim/sil/{{ e.id }}" class="btn-glass text-decoration-none text-danger" onclick="return confirm('Silmek istediğinize emin misiniz?')"><i class="bi bi-trash"></i></a>
+                        <td class="pe-3 text-center" onclick="event.stopPropagation();">
+                            <a href="/sertifika/{{ e.id }}" class="btn-glass text-decoration-none text-success" title="Sertifikayı Görüntüle"><i class="bi bi-award"></i></a>
+                            <a href="/egitim/duzenle/{{ e.id }}" class="btn-glass text-decoration-none text-primary" title="Düzenle"><i class="bi bi-pencil-square"></i></a>
+                            <a href="/egitim/sil/{{ e.id }}" class="btn-glass text-decoration-none text-danger" title="Sil" onclick="return confirm('Silmek istediğinize emin misiniz?')"><i class="bi bi-trash"></i></a>
                         </td>
                     </tr>
+                    {% else %}
+                    <tr><td colspan="12" class="text-center text-muted py-3">Aramanıza uygun veya kayıtlı eğitim bulunmuyor.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
@@ -1143,9 +1163,154 @@ PLAN_DUZENLE_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
     </div>
 """)
 
+# ---------------- FİRMA YÖNETİM SAYFASI ----------------
+FIRMA_YONETIM_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0 fw-bold" style="font-size: 1.1rem;">🏢 Firma Yönetimi</h3>
+        <button class="btn btn-primary rounded-pill px-3" data-bs-toggle="modal" data-bs-target="#firmaEkleModal">+ Yeni Firma</button>
+    </div>
+    
+    <div class="widget-card">
+        <div class="table-responsive">
+            <table class="table table-custom align-middle mb-0">
+                <thead style="background:#f8f9fa;">
+                    <tr>
+                        <th class="ps-3">#</th>
+                        <th>Firma Adı</th>
+                        <th>Durum</th>
+                        <th>Eklenme Tarihi</th>
+                        <th class="pe-3 text-end">İşlemler</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for f in firmalar_db %}
+                    <tr>
+                        <td class="ps-3">{{ loop.index }}</td>
+                        <td><strong>{{ f.adi }}</strong></td>
+                        <td>
+                            {% if f.aktif %}
+                                <span class="badge bg-success">Aktif</span>
+                            {% else %}
+                                <span class="badge bg-secondary">Pasif</span>
+                            {% endif %}
+                        </td>
+                        <td>{{ f.olusturma.strftime('%d.%m.%Y') if f.olusturma else '-' }}</td>
+                        <td class="pe-3 text-end">
+                            <a href="/firma/sil/{{ f.id }}" class="btn btn-sm btn-outline-danger rounded-pill" onclick="return confirm('{{ f.adi }} firmasını silmek istediğinize emin misiniz? Tüm verileri de silinecek!')">Sil</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="5" class="text-center text-muted py-3">Henüz firma eklenmemiş.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Yeni Firma Modal -->
+    <div class="modal fade" id="firmaEkleModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <form method="post" action="/firma/ekle">
+                    <div class="modal-header">
+                        <h5 class="modal-title">Yeni Firma Ekle</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <label class="form-label">Firma Adı</label>
+                        <input class="form-control" name="firma_adi" required placeholder="Örn: ABC İnşaat A.Ş.">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">İptal</button>
+                        <button type="submit" class="btn btn-primary">Kaydet</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+""")
+
 # ---------------- TÜM FİRMALAR ÖZET ----------------
 TUM_FIRMALAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
-    <h3 class="mb-4 fw-bold" style="font-size: 1.2rem;">📊 Tüm Firmalar Özet Paneli</h3>
+    <h3 class="mb-4 fw-bold" style="font-size: 1.2rem;">📊 Tüm Firmalar ve İSG İstatistik Paneli</h3>
+    
+    <!-- ÜST İSTATİSTİK KARTLARI -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="widget-card text-center" style="border-left: none; border-bottom: 4px solid #3498db;">
+                <h4 class="mb-1 fw-bold text-primary">{{ genel_istatistikler.toplam_personel }}</h4>
+                <p class="text-muted mb-0" style="font-size: 0.85rem;">Toplam Personel</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="widget-card text-center" style="border-left: none; border-bottom: 4px solid #e74c3c;">
+                <h4 class="mb-1 fw-bold text-danger">{{ genel_istatistikler.toplam_kaza }}</h4>
+                <p class="text-muted mb-0" style="font-size: 0.85rem;">Toplam İş Kazası</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="widget-card text-center" style="border-left: none; border-bottom: 4px solid #1abc9c;">
+                <h4 class="mb-1 fw-bold text-success">{{ genel_istatistikler.toplam_egitim }}</h4>
+                <p class="text-muted mb-0" style="font-size: 0.85rem;">Verilen Eğitimler</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="widget-card text-center" style="border-left: none; border-bottom: 4px solid #f39c12;">
+                <h4 class="mb-1 fw-bold text-warning">{{ genel_istatistikler.suresi_gecen }}</h4>
+                <p class="text-muted mb-0" style="font-size: 0.85rem;">Süresi Geçen Eğitim</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- GRAFİKLER -->
+    <div class="row g-3 mb-4">
+        <div class="col-md-6">
+            <div class="widget-card">
+                <h6 class="fw-bold mb-3">Eğitim Durumları Dağılımı</h6>
+                <canvas id="egitimGrafik" style="max-height: 250px;"></canvas>
+            </div>
+        </div>
+        <div class="col-md-6">
+            <div class="widget-card">
+                <h6 class="fw-bold mb-3">Son 6 Ayın Kaza Grafiği</h6>
+                <canvas id="kazaGrafik" style="max-height: 250px;"></canvas>
+            </div>
+        </div>
+    </div>
+    <!-- İSG PERFORMANS METRİKLERİ -->
+    <div class="row g-3 mb-4 mt-2">
+        <div class="col-md-12">
+            <h5 class="mb-3 fw-bold" style="font-size: 1rem;">📈 İSG Performans Metrikleri</h5>
+        </div>
+        <div class="col-md-3">
+            <div class="widget-card text-center bg-light">
+                <h4 class="mb-1 fw-bold text-dark">{{ isg_metrikleri.toplam_rapor_gunu }}</h4>
+                <p class="text-muted mb-0" style="font-size: 0.8rem;">Toplam Kayıp Gün</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="widget-card text-center bg-light">
+                <h4 class="mb-1 fw-bold text-dark">%{{ isg_metrikleri.kaza_orani }}</h4>
+                <p class="text-muted mb-0" style="font-size: 0.8rem;">Kaza Olabilirlik Oranı</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="widget-card text-center bg-light">
+                <h4 class="mb-1 fw-bold text-dark">{{ isg_metrikleri.ortalama_rapor }} Gün</h4>
+                <p class="text-muted mb-0" style="font-size: 0.8rem;">Kaza Başına Ort. İş Göremezlik</p>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="widget-card text-center bg-light">
+                <h4 class="mb-1 fw-bold text-dark">%{{ isg_metrikleri.egitim_tamamlama_orani }}</h4>
+                <p class="text-muted mb-0" style="font-size: 0.8rem;">Eğitim Geçerlilik Oranı</p>
+            </div>
+        </div>
+    </div>
+    <!-- FİRMA ÖZET TABLOSU -->
+    <h5 class="mb-3 fw-bold" style="font-size: 1rem;">🏢 Firma Bazlı Özet</h5>
     <div class="widget-card p-0 overflow-hidden mb-4" style="border-left:none;">
         <div class="table-responsive">
             <table class="table table-custom align-middle mb-0">
@@ -1157,7 +1322,6 @@ TUM_FIRMALAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                         <th class="text-center" style="font-size:0.8rem;">Süresi Geçen</th>
                         <th class="text-center" style="font-size:0.8rem;">Yaklaşan (30 Gün)</th>
                         <th class="text-center" style="font-size:0.8rem;">Kaza</th>
-                        <th class="text-center" style="font-size:0.8rem;">Risk Planı</th>
                         <th class="text-center pe-3" style="font-size:0.8rem;">İşlem</th>
                     </tr>
                 </thead>
@@ -1179,12 +1343,8 @@ TUM_FIRMALAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
                             {% if f.kaza_sayisi > 0 %}<span class="badge bg-danger">{{ f.kaza_sayisi }}</span>
                             {% else %}<span class="badge bg-light text-dark">0</span>{% endif %}
                         </td>
-                        <td class="text-center">
-                            {% if f.plan_var %}<span class="badge bg-success">✓</span>
-                            {% else %}<span class="badge bg-light text-dark">-</span>{% endif %}
-                        </td>
                         <td class="text-center pe-3">
-                            <a href="/firma_sec/{{ f.firma }}" class="btn btn-sm btn-primary rounded-pill px-3">Firmaya Git →</a>
+                            <a href="/firma_sec/{{ f.firma }}" class="btn btn-sm btn-primary rounded-pill px-3">Git →</a>
                         </td>
                     </tr>
                     {% endfor %}
@@ -1192,7 +1352,40 @@ TUM_FIRMALAR_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
             </table>
         </div>
     </div>
+
+    <!-- GRAFİK ÇALIŞTIRMA SCRIPTI -->
+    <script>
+        const ctxEgitim = document.getElementById('egitimGrafik');
+        new Chart(ctxEgitim, {
+            type: 'doughnut',
+            data: {
+                labels: ['Geçerli', 'Yaklaşıyor', 'Süresi Geçmiş'],
+                datasets: [{
+                    data: [{{ grafik_egitim.gecerli }}, {{ grafik_egitim.yaklasan }}, {{ grafik_egitim.gecmis }}],
+                    backgroundColor: ['#1abc9c', '#f39c12', '#e74c3c'],
+                    borderWidth: 0
+                }]
+            },
+            options: { cutout: '70%', plugins: { legend: { position: 'bottom' } } }
+        });
+
+        const ctxKaza = document.getElementById('kazaGrafik');
+        new Chart(ctxKaza, {
+            type: 'bar',
+            data: {
+                labels: {{ grafik_kaza.aylar | safe }},
+                datasets: [{
+                    label: 'Kaza Sayısı',
+                    data: {{ grafik_kaza.sayilar | safe }},
+                    backgroundColor: '#e74c3c',
+                    borderRadius: 5
+                }]
+            },
+            options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 } } } }
+        });
+    </script>
 """)
+   
 
 # ---------------- ROTALAR ----------------
 @app.route('/')
@@ -1220,34 +1413,92 @@ def dashboard():
     son_kazalar = [k for k in kaza_q if 0 <= (bugun - k.tarih).days <= 30]
     for k in son_kazalar:
         uyarilar.append({'firma': k.firma_adi, 'mesaj': f'{k.personel_adi} için son 30 günde iş kazası var. RD gözden geçirilmeli!', 'durum': 'Acil Aksiyon'})
-    return render_template_string(DASHBOARD_HTML, yaklasan_egitimler=yaklasan_egitimler, suresi_gecenler=suresi_gecenler, risk_planlari=risk_planlari, bugun=bugun, uyarilar=uyarilar, firmalar=FIRMALAR)
+    return render_template_string(DASHBOARD_HTML, yaklasan_egitimler=yaklasan_egitimler, suresi_gecenler=suresi_gecenler, risk_planlari=risk_planlari, bugun=bugun, uyarilar=uyarilar, firmalar=get_firmalar_listesi())
 
 @app.route('/tum_firmalar')
 def tum_firmalar():
     bugun = date.today()
     firma_ozetleri = []
-    for f in FIRMALAR:
-        egitimler = Egitim.query.filter_by(firma_adi=f).all()
-        kazalar = IsKazasi.query.filter_by(firma_adi=f).all()
-        planlar = RiskPlan.query.filter_by(firma_adi=f).all()
+    tum_egitimler = Egitim.query.all()
+    tum_kazalar = IsKazasi.query.all()
+    
+    # 1. Firma Bazlı Özet Verileri
+    for f in get_firmalar_listesi():
+        egitimler = [e for e in tum_egitimler if e.firma_adi == f]
+        kazalar = [k for k in tum_kazalar if k.firma_adi == f]
         personeller = set([e.personel_adi for e in egitimler] + [k.personel_adi for k in kazalar])
+        
         suresi_gecen = sum(1 for e in egitimler if e.durum == 'SÜRESİ GEÇMİŞ')
         yaklasan = sum(1 for e in egitimler if e.durum == 'YAKLAŞIYOR')
+        
         firma_ozetleri.append({
             'firma': f,
             'personel_sayisi': len(personeller),
             'egitim_sayisi': len(egitimler),
             'suresi_gecen': suresi_gecen,
             'yaklasan': yaklasan,
-            'kaza_sayisi': len(kazalar),
-            'plan_var': len(planlar) > 0
+            'kaza_sayisi': len(kazalar)
         })
-    return render_template_string(TUM_FIRMALAR_HTML, firma_ozetleri=firma_ozetleri, firmalar=FIRMALAR)
+
+    # 2. Genel İstatistikler
+    tum_personeller = set([e.personel_adi for e in tum_egitimler] + [k.personel_adi for k in tum_kazalar])
+    genel_istatistikler = {
+        'toplam_personel': len(tum_personeller),
+        'toplam_kaza': len(tum_kazalar),
+        'toplam_egitim': len(tum_egitimler),
+        'suresi_gecen': sum(1 for e in tum_egitimler if e.durum == 'SÜRESİ GEÇMİŞ')
+    }
+
+    # 3. Grafik Verileri (Eğitim Pasta Grafiği)
+    grafik_egitim = {
+        'gecerli': sum(1 for e in tum_egitimler if e.durum == 'GEÇERLİ'),
+        'yaklasan': sum(1 for e in tum_egitimler if e.durum == 'YAKLAŞIYOR'),
+        'gecmis': sum(1 for e in tum_egitimler if e.durum == 'SÜRESİ GEÇMİŞ')
+    }
+
+    # 4. Grafik Verileri (Son 6 Ay Kaza Bar Grafiği)
+    aylar = []
+    kaza_sayilari = []
+    for i in range(5, -1, -1):
+        ay_tarihi = bugun - relativedelta(months=i)
+        aylar.append(ay_tarihi.strftime('%B'))
+        sayi = sum(1 for k in tum_kazalar if k.tarih.year == ay_tarihi.year and k.tarih.month == ay_tarihi.month)
+        kaza_sayilari.append(sayi)
+        
+    grafik_kaza = {
+        'aylar': str(aylar).replace("'", '"'),
+        'sayilar': str(kaza_sayilari)
+    }
+
+    # 5. İSG Performans Metrikleri (Kaza Sıklık, Ağırlık vb.)
+    toplam_rapor_gunu = sum(k.rapor_gun_sayisi or 0 for k in tum_kazalar)
+    toplam_personel_sayisi = len(tum_personeller)
+    
+    kaza_orani = (len(tum_kazalar) / toplam_personel_sayisi * 100) if toplam_personel_sayisi > 0 else 0
+    ortalama_rapor = (toplam_rapor_gunu / len(tum_kazalar)) if len(tum_kazalar) > 0 else 0
+    egitim_tamamlama_orani = (grafik_egitim['gecerli'] / len(tum_egitimler) * 100) if len(tum_egitimler) > 0 else 0
+
+    isg_metrikleri = {
+        'toplam_rapor_gunu': toplam_rapor_gunu,
+        'kaza_orani': round(kaza_orani, 1),
+        'ortalama_rapor': round(ortalama_rapor, 1),
+        'egitim_tamamlama_orani': round(egitim_tamamlama_orani, 1)
+    }
+
+    return render_template_string(
+        TUM_FIRMALAR_HTML, 
+        firma_ozetleri=firma_ozetleri, 
+        firmalar=get_firmalar_listesi(),
+        genel_istatistikler=genel_istatistikler,
+        grafik_egitim=grafik_egitim,
+        grafik_kaza=grafik_kaza,
+        isg_metrikleri=isg_metrikleri
+    )
 
 @app.route('/planlar')
 def plan_listesi():
     planlar = firma_filtre(RiskPlan.query).all()
-    return render_template_string(PLANLAR_HTML, planlar=planlar, bugun=date.today(), firmalar=FIRMALAR)
+    return render_template_string(PLANLAR_HTML, planlar=planlar, bugun=date.today(), firmalar=get_firmalar_listesi())
 
 @app.route('/plan/ekle', methods=['GET', 'POST'])
 def plan_ekle():
@@ -1270,7 +1521,7 @@ def plan_ekle():
         plan = RiskPlan(firma_adi=firma, rd_tarihi=rd_tarihi, rd_tehlike_sinifi=rd_sinif, rd_gecerlilik=rd_gecerlilik, adp_tarihi=adp_tarihi, adp_tehlike_sinifi=adp_sinif, adp_gecerlilik=adp_gecerlilik, egitim_plani_tarihi=egt_tarihi, egitim_tehlike_sinifi=egt_sinif, egitim_plani_gecerlilik=egt_gecerlilik, calisma_plani_tarihi=cls_tarihi, calisma_tehlike_sinifi=cls_sinif, calisma_plani_gecerlilik=cls_gecerlilik)
         db.session.add(plan); db.session.commit()
         return redirect(url_for('plan_listesi'))
-    return render_template_string(PLAN_EKLE_HTML, firmalar=FIRMALAR)
+    return render_template_string(PLAN_EKLE_HTML, firmalar=get_firmalar_listesi())
 
 @app.route('/plan/duzenle/<int:id>', methods=['GET', 'POST'])
 def plan_duzenle(id):
@@ -1294,7 +1545,7 @@ def plan_duzenle(id):
         plan.calisma_plani_gecerlilik = hesapla_gecerlilik(plan.calisma_plani_tarihi, plan.calisma_tehlike_sinifi)
         db.session.commit()
         return redirect(url_for('plan_listesi'))
-    return render_template_string(PLAN_DUZENLE_HTML, plan=plan, firmalar=FIRMALAR)
+    return render_template_string(PLAN_DUZENLE_HTML, plan=plan, firmalar=get_firmalar_listesi())
 
 @app.route('/plan/sil/<int:id>')
 def plan_sil(id):
@@ -1312,7 +1563,7 @@ def egitim_listesi():
     for k in kazalar: 
         p = k.personel_adi.lower().strip()
         kazalar_dict[p] = kazalar_dict.get(p, 0) + 1
-    return render_template_string(EGITIMLER_HTML, egitimler=egitimler, siralama=siralama, kazalar_dict=kazalar_dict, firmalar=FIRMALAR)
+    return render_template_string(EGITIMLER_HTML, egitimler=egitimler, siralama=siralama, kazalar_dict=kazalar_dict, firmalar=get_firmalar_listesi())
 
 @app.route('/personel_detay/<path:personel_adi>')
 def personel_detay(personel_adi):
@@ -1326,7 +1577,7 @@ def personel_detay(personel_adi):
     kazalar = [k for k in q_k.all() if k.personel_adi.lower().strip() == p]
     kazalar.sort(key=lambda x: x.tarih, reverse=True)
     personel_bilgi = egitimler[0] if egitimler else (kazalar[0] if kazalar else None)
-    return render_template_string(PERSONEL_DETAY_HTML, personel_adi=personel_adi, personel_bilgi=personel_bilgi, egitimler=egitimler, kazalar=kazalar, firmalar=FIRMALAR)
+    return render_template_string(PERSONEL_DETAY_HTML, personel_adi=personel_adi, personel_bilgi=personel_bilgi, egitimler=egitimler, kazalar=kazalar, firmalar=get_firmalar_listesi())
 
 @app.route('/egitimler/excel')
 def egitim_excel():
@@ -1341,7 +1592,7 @@ def egitim_excel():
         ws.append([index, e.firma_adi, e.personel_adi, e.gorevi or '-', e.ise_giris.strftime('%d.%m.%Y') if e.ise_giris else '-', e.egitim_adi, e.egitim_tarihi.strftime('%d.%m.%Y'), e.gecerlilik_ay, e.son_gecerlilik.strftime('%d.%m.%Y'), e.durum])
     output = io.BytesIO(); wb.save(output); output.seek(0)
     return send_file(output, download_name=f"{aktif_firma()}_Egitim_Listesi.xlsx".replace(" ", "_"), as_attachment=True)
-
+        
 @app.route('/egitim/ekle', methods=['GET', 'POST'])
 def egitim_ekle():
     firma = aktif_firma()
@@ -1352,7 +1603,7 @@ def egitim_ekle():
         e = Egitim(firma_adi=firma, personel_adi=request.form['personel_adi'], gorevi=request.form.get('gorevi', ''), ise_giris=ise_giris, resim=resim_adi, egitim_adi=request.form['egitim_adi'], egitim_tarihi=datetime.strptime(request.form['egitim_tarihi'], '%Y-%m-%d').date(), gecerlilik_ay=int(request.form['gecerlilik_ay']), sertifika_no=request.form.get('sertifika_no', ''))
         db.session.add(e); db.session.commit()
         return redirect(url_for('egitim_listesi'))
-    return render_template_string(EGITIM_EKLE_HTML, personeller=get_personeller(firma), firmalar=FIRMALAR)
+    return render_template_string(EGITIM_EKLE_HTML, personeller=get_personeller(firma), firmalar=get_firmalar_listesi())
 
 @app.route('/egitim/duzenle/<int:id>', methods=['GET', 'POST'])
 def egitim_duzenle(id):
@@ -1368,7 +1619,7 @@ def egitim_duzenle(id):
             resim_sil(e.resim); e.resim = resim_kaydet(yeni_resim)
         db.session.commit()
         return redirect(url_for('egitim_listesi'))
-    return render_template_string(EGITIM_DUZENLE_HTML, e=e, personeller=get_personeller(firma), firmalar=FIRMALAR)
+    return render_template_string(EGITIM_DUZENLE_HTML, e=e, personeller=get_personeller(firma), firmalar=get_firmalar_listesi())
 
 @app.route('/egitim/sil/<int:id>')
 def egitim_sil(id):
@@ -1381,7 +1632,7 @@ def kaza_listesi():
     query = firma_filtre(IsKazasi.query)
     if siralama == 'eski': kazalar = query.order_by(IsKazasi.tarih.asc()).all()
     else: kazalar = query.order_by(IsKazasi.tarih.desc()).all()
-    return render_template_string(KAZALAR_HTML, kazalar=kazalar, siralama=siralama, firmalar=FIRMALAR)
+    return render_template_string(KAZALAR_HTML, kazalar=kazalar, siralama=siralama, firmalar=get_firmalar_listesi())
 
 @app.route('/kazalar/excel')
 def kaza_excel():
@@ -1406,7 +1657,7 @@ def kaza_ekle():
         k = IsKazasi(firma_adi=firma, personel_adi=request.form['personel_adi'], tarih=datetime.strptime(request.form['tarih'], '%Y-%m-%d').date(), yer=request.form['yer'], aciklama=request.form['aciklama'], yaralanma_turu=request.form['yaralanma_turu'], kok_neden=request.form.get('kok_neden', ''), duzeltici_faaliyet=request.form.get('duzeltici_faaliyet', ''), sgk_bildirim_tarihi=datetime.strptime(sgk_str, '%Y-%m-%d').date() if sgk_str else None, rapor_gun_sayisi=int(rapor_str) if rapor_str else None, kaza_sonrasi_egitim=datetime.strptime(sonraki_egitim_str, '%Y-%m-%d').date() if sonraki_egitim_str else None)
         db.session.add(k); db.session.commit()
         return redirect(url_for('kaza_listesi'))
-    return render_template_string(KAZA_EKLE_HTML, personeller=get_personeller(firma), firmalar=FIRMALAR)
+    return render_template_string(KAZA_EKLE_HTML, personeller=get_personeller(firma), firmalar=get_firmalar_listesi())
 
 @app.route('/kaza/duzenle/<int:id>', methods=['GET', 'POST'])
 def kaza_duzenle(id):
@@ -1421,20 +1672,211 @@ def kaza_duzenle(id):
         k.kaza_sonrasi_egitim = datetime.strptime(sonraki_egitim_str, '%Y-%m-%d').date() if sonraki_egitim_str else None
         db.session.commit()
         return redirect(url_for('kaza_listesi'))
-    return render_template_string(KAZA_DUZENLE_HTML, k=k, personeller=get_personeller(aktif_firma()), firmalar=FIRMALAR)
+    return render_template_string(KAZA_DUZENLE_HTML, k=k, personeller=get_personeller(aktif_firma()), firmalar=get_firmalar_listesi())
 
 @app.route('/kaza/sil/<int:id>')
 def kaza_sil(id):
     k = IsKazasi.query.get_or_404(id); db.session.delete(k); db.session.commit()
     return redirect(url_for('kaza_listesi'))
 
-# Veritabanı tablolarını uygulama başlarken oluştur (PostgreSQL için)
+# ---------------- FİRMA YÖNETİM ROUTE'LARI ----------------
+@app.route('/firma_yonetim')
+def firma_yonetim():
+    firmalar_db = Firma.query.order_by(Firma.adi).all()
+    return render_template_string(FIRMA_YONETIM_HTML, firmalar_db=firmalar_db, firmalar=get_firmalar_listesi())
+
+@app.route('/firma/ekle', methods=['POST'])
+def firma_ekle_route():
+    firma_adi = request.form.get('firma_adi', '').strip()
+    if firma_adi:
+        if not Firma.query.filter_by(adi=firma_adi).first():
+            db.session.add(Firma(adi=firma_adi))
+            db.session.commit()
+    return redirect(url_for('firma_yonetim'))
+
+@app.route('/firma/sil/<int:id>', methods=['GET', 'POST'])
+def firma_sil_route(id):
+    firma = Firma.query.get_or_404(id)
+    if firma.adi in VARSAYILAN_FIRMALAR:
+        return "Varsayılan firma silinemez.", 400
+    try:
+        Egitim.query.filter_by(firma_adi=firma.adi).delete()
+        IsKazasi.query.filter_by(firma_adi=firma.adi).delete()
+        RiskPlan.query.filter_by(firma_adi=firma.adi).delete()
+        db.session.delete(firma)
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return f"Silme hatası: {e}", 500
+    if session.get('firma_adi') == firma.adi:
+        session.pop('firma_adi', None)
+    return redirect(url_for('firma_yonetim'))
+
+# ---------------- VERİTABANI BAŞLATMA ----------------
 with app.app_context():
     try:
         db.create_all()
         print("✅ Veritabanı tabloları başarıyla oluşturuldu veya zaten mevcut.")
+        try:
+            get_firmalar_listesi()
+            print("✅ Firma listesi hazır.")
+        except Exception as fe:
+            print(f"⚠️ Firma tohumlama uyarısı: {fe}")
     except Exception as e:
         print(f"❌ Tablo oluşturma hatası: {e}")
+# ---------------- PERSONEL LİSTESİ ----------------
+PERSONELLER_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+        <h3 class="mb-0 fw-bold" style="font-size: 1.1rem;">👥 Personel Listesi</h3>
+        <form method="get" class="d-flex gap-2 align-items-center m-0">
+            <input type="text" name="arama" class="form-control border-0 shadow-sm form-control-sm" placeholder="Personel Ara..." value="{{ arama or '' }}" style="width: 250px; border-radius: 20px;">
+            <button type="submit" class="btn btn-primary rounded-pill px-3" style="font-size:0.8rem;"><i class="bi bi-search"></i></button>
+        </form>
+    </div>
+    <div class="widget-card p-0 overflow-hidden" style="border-left:none;">
+        <div class="table-responsive">
+            <table class="table table-custom align-middle table-hover mb-0">
+                <thead style="background:#f8f9fa;">
+                    <tr>
+                        <th class="ps-3" style="font-size:0.75rem;">Sıra</th>
+                        <th style="font-size:0.75rem;">Resim</th>
+                        <th style="font-size:0.75rem;">Personel Adı</th>
+                        <th style="font-size:0.75rem;">Firma</th>
+                        <th style="font-size:0.75rem;">Görevi</th>
+                        <th style="font-size:0.75rem;">İşe Giriş</th>
+                        <th class="pe-3 text-center" style="font-size:0.75rem;">İşlem</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for p in personeller %}
+                    <tr class="clickable-row" onclick="window.location='/personel_detay/{{ p.adi }}'">
+                        <td class="ps-3">{{ loop.index }}</td>
+                        <td>
+                            {% if p.resim %}<img src="{{ url_for('static', filename='uploads/' + p.resim) }}" class="rounded-circle" style="width:30px; height:30px; object-fit:cover;">
+                            {% else %}<div class="bg-secondary text-white rounded-circle d-flex align-items-center justify-content-center" style="width:30px; height:30px; font-size:10px;">?</div>{% endif %}
+                        </td>
+                        <td class="fw-bold">{{ p.adi }}</td>
+                        <td>{{ p.firma_adi }}</td>
+                        <td>{{ p.gorevi or '-' }}</td>
+                        <td>{{ p.ise_giris.strftime('%d.%m.%Y') if p.ise_giris else '-' }}</td>
+                        <td class="pe-3 text-center">
+                            <a href="/personel_detay/{{ p.adi }}" class="btn btn-sm btn-primary rounded-pill px-3">Detay →</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7" class="text-center text-muted py-3">Kayıtlı personel bulunmuyor.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+""")
 
+@app.route('/personeller')
+def personeller_listesi():
+    arama = request.args.get('arama', '').strip()
+    firma = aktif_firma()
+    
+    personel_dict = {}
+    egitimler = firma_filtre(Egitim.query).all()
+    
+    for e in egitimler:
+        if arama and arama.lower() not in e.personel_adi.lower(): continue
+        if e.personel_adi not in personel_dict:
+            personel_dict[e.personel_adi] = {
+                'adi': e.personel_adi,
+                'firma_adi': e.firma_adi,
+                'gorevi': e.gorevi,
+                'ise_giris': e.ise_giris,
+                'resim': e.resim
+            }
+            
+    personeller = list(personel_dict.values())
+    personeller.sort(key=lambda x: x['adi'])
+    
+    return render_template_string(PERSONELLER_HTML, personeller=personeller, arama=arama, firmalar=get_firmalar_listesi())
+# ---------------- PDF OLUŞTURMA YARDIMCISI ----------------
+def pdf_olustur(html_icerik):
+    result = io.BytesIO()
+    pdf = pisa.CreatePDF(io.StringIO(html_icerik), dest=result)
+    if not pdf.err:
+        return result
+    return None
+# ---------------- DİJİTAL SERTİFİKA HTML ----------------
+SERTIFIKA_HTML = BASE_HTML.replace("{% block content %}{% endblock %}", """
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3 class="mb-0 fw-bold" style="font-size: 1.1rem;">📜 Dijital Eğitim Sertifikası</h3>
+        <a href="/egitimler" class="btn btn-light rounded-pill px-3"><i class="bi bi-arrow-left"></i> Listeye Dön</a>
+    </div>
+    <div class="widget-card" style="max-width: 800px; margin: 0 auto; border-top: 8px solid #1e3c72; padding: 40px; background: #fff;">
+        <div class="text-center mb-4">
+            <h2 class="fw-bold" style="color: #1e3c72; letter-spacing: 2px; font-family: serif;">EĞİTİM SERTİFİKASI</h2>
+            <p class="text-muted">Bu belge, aşağıda bilgileri yer alan personelin eğitimi başarıyla tamamladığını onaylar.</p>
+        </div>
+        <div class="row align-items-center">
+            <div class="col-md-8">
+                <table class="table table-borderless">
+                    <tr><th style="width: 160px; color: #555;">Personel Adı:</th><td style="font-size: 1.1rem;"><strong>{{ egitim.personel_adi }}</strong></td></tr>
+                    <tr><th style="color: #555;">Firma:</th><td>{{ egitim.firma_adi }}</td></tr>
+                    <tr><th style="color: #555;">Görevi:</th><td>{{ egitim.gorevi or '-' }}</td></tr>
+                    <tr><th style="color: #555;">Eğitim Adı:</th><td>{{ egitim.egitim_adi }}</td></tr>
+                    <tr><th style="color: #555;">Eğitim Tarihi:</th><td>{{ egitim.egitim_tarihi.strftime('%d.%m.%Y') }}</td></tr>
+                    <tr><th style="color: #555;">Son Geçerlilik:</th><td>{{ egitim.son_gecerlilik.strftime('%d.%m.%Y') }}</td></tr>
+                    <tr><th style="color: #555;">Durum:</th>
+                        <td>
+                            {% if egitim.durum == 'GEÇERLİ' %}<span class="badge bg-success" style="font-size: 0.9rem; padding: 8px 15px;">GEÇERLİ</span>
+                            {% elif egitim.durum == 'YAKLAŞIYOR' %}<span class="badge bg-warning text-dark" style="font-size: 0.9rem; padding: 8px 15px;">YAKLAŞIYOR</span>
+                            {% else %}<span class="badge bg-danger" style="font-size: 0.9rem; padding: 8px 15px;">SÜRESİ GEÇMİŞ</span>{% endif %}
+                        </td>
+                    </tr>
+                </table>
+            </div>
+            <div class="col-md-4 text-center">
+                <img src="data:image/png;base64,{{ qr_kod }}" alt="QR Kod" style="width: 180px; height: 180px; border: 2px solid #ddd; border-radius: 10px; padding: 5px;">
+                <p class="text-muted mt-2" style="font-size: 0.75rem;"><i class="bi bi-phone"></i> Doğrulama için okutun</p>
+            </div>
+        </div>
+    </div>
+""")
+@app.route('/sertifika/<int:id>')
+def sertifika_goruntule(id):
+    egitim = Egitim.query.get_or_404(id)
+    
+        # Canlı sitenin adresi (Render'daki linkin)
+    CANLI_SITE_URL = "https://isg-takip.onrender.com"  # <-- Kendi Render linkinle değiştir
+
+    dogrulama_url = f"{CANLI_SITE_URL}/sertifika/dogrula/{egitim.id}"
+    
+    # QR Kodu oluştur
+    qr = qrcode.QRCode(version=1, box_size=10, border=2)
+    qr.add_data(dogrulama_url)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    
+    # QR kodu Base64'e çevir (HTML'de <img> etiketiyle göstermek için)
+    buffered = io.BytesIO()
+    img.save(buffered, format="PNG")
+    qr_kod_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+    
+    return render_template_string(SERTIFIKA_HTML, egitim=egitim, qr_kod=qr_kod_base64, firmalar=get_firmalar_listesi())
+
+@app.route('/sertifika/dogrula/<int:id>')
+def sertifika_dogrula(id):
+    egitim = Egitim.query.get_or_404(id)
+    # Bu sayfa QR okutulduğunda açılır (Sade bir doğrulama sayfası)
+    return f"""
+    <html><head><title>Sertifika Doğrulama</title><meta charset='utf-8'>
+    <style>body {{ font-family: sans-serif; text-align: center; padding-top: 50px; background-color: #f4f7f6; }}
+    .card {{ background: white; padding: 40px; border-radius: 15px; display: inline-block; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }}</style>
+    </head>
+    <body>
+        <div class="card">
+            <h1 style='color: #1abc9c;'>✅ Sertifika Doğrulandı</h1>
+            <h3>{egitim.personel_adi} - {egitim.egitim_adi}</h3>
+            <p>Bu sertifika <strong>{egitim.firma_adi}</strong> firmasına ait olup, geçerlilik tarihi <strong>{egitim.son_gecerlilik.strftime('%d.%m.%Y')}</strong> dir.</p>
+            <p style="color: #999; font-size: 0.8rem; margin-top: 30px;">İSG TAKİP Sistemi</p>
+        </div>
+    </body></html>
+    """
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
